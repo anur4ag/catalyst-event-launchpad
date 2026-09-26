@@ -104,3 +104,19 @@ export async function getLaunch(conn: Connection, pool: string): Promise<Launch 
 }
 
 export const short = (s: string, n = 4) => `${s.slice(0, n)}…${s.slice(-n)}`;
+
+const FILLER = ["WILL", "THE", "ON", "IN", "BY", "BEFORE", "AT", "OF", "A", "AN", "TO", "BE"];
+
+/** "Will GTA 6 release on November 19th, 2026?" -> "GTARELNOV" */
+export function suggestSymbol(title: string) {
+  const words = title.toUpperCase().replace(/[^A-Z0-9 ]/g, "").split(/\s+/).filter((w) => w.length > 1 && !FILLER.includes(w));
+  return words.slice(0, 3).map((w, i) => (i === 0 ? w.slice(0, 4) : w.slice(0, 3))).join("").slice(0, 10);
+}
+
+/** Token name from a market question, cut on a word boundary to Metaplex's 32 bytes. */
+export function suggestName(title: string) {
+  const words = title.replace(/^will\s+/i, "").replace(/[?.!]+$/, "").split(/\s+/);
+  let name = "";
+  for (const w of words) if (`${name} ${w}`.trim().length <= 32) name = `${name} ${w}`.trim(); else break;
+  return name.replace(/[,;:]$/, "").replace(/\s+(by|on|in|at|of|to|the|a|an|before)$/i, "");
+}

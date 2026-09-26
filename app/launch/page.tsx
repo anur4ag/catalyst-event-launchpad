@@ -8,8 +8,8 @@ import { launchSteps } from "@/lib/actions";
 import { PLATFORM, PRESET_CONFIGS, SCALE, NETWORK } from "@/lib/config";
 import { fmtSol, pantaGet, useLoad, useSendSteps } from "@/lib/client";
 import { curvePoints, price } from "@/lib/curve";
-import { metaUri } from "@/lib/launches";
-import { toUnix, type Market } from "@/lib/panta";
+import { metaUri, suggestName, suggestSymbol } from "@/lib/launches";
+import { isOpen, toUnix, type Market } from "@/lib/panta";
 import { PRESETS, type PresetId } from "@/lib/presets";
 import { CurveChart, DataSourceNote, Odds, StepLog } from "@/components/ui";
 
@@ -60,7 +60,7 @@ export default function LaunchPage() {
     setMarketId(mk.marketId);
     setPreset("event-horizon");
     if (!symbol) setSymbol(suggestSymbol(mk.title));
-    if (!name) setName(mk.title.replace(/\?$/, "").slice(0, 32));
+    if (!name) setName(suggestName(mk.title));
   };
 
   const valid = name.trim().length > 0 && name.length <= 32 && /^[A-Z0-9]{2,10}$/.test(symbol) && available(preset) && Number(firstBuy) >= 0;
@@ -102,7 +102,7 @@ export default function LaunchPage() {
             </div>
             {list.error && <p className="notice">Panta: {list.error}</p>}
             <div className="list">
-              {list.data?.items.map((mk) => (
+              {list.data?.items.filter(isOpen).map((mk) => (
                 <button
                   key={mk.marketId}
                   onClick={() => pick(mk)}
@@ -210,9 +210,4 @@ export default function LaunchPage() {
       </div>
     </div>
   );
-}
-
-function suggestSymbol(title: string) {
-  const words = title.toUpperCase().replace(/[^A-Z0-9 ]/g, "").split(/\s+/).filter((w) => w.length > 1 && !["WILL", "THE", "ON", "IN", "BY", "BEFORE", "AT", "OF"].includes(w));
-  return words.slice(0, 3).map((w, i) => (i === 0 ? w.slice(0, 4) : w.slice(0, 3))).join("").slice(0, 10);
 }

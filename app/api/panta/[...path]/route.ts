@@ -9,7 +9,8 @@ async function handle(req: Request, { params }: { params: Promise<{ path: string
   try {
     const body = method === "POST" ? await req.json() : undefined;
     const data = await panta(method, path, body, url.searchParams);
-    return Response.json(data, { headers: { "x-panta-mode": pantaMode() } });
+    // Tells the UI whether a quote can go on to a real buy (false for pk_live_ without PANTA_ALLOW_TRADE).
+    return Response.json(data, { headers: { "x-panta-mode": pantaMode(), "x-panta-trade": isAllowed("POST", "primaryorderbuild/") ? "1" : "0" } });
   } catch (e) {
     const err = e instanceof PantaError ? e : new PantaError("INTERNAL_ERROR", (e as Error).message, 502);
     return Response.json({ code: err.code, message: err.message }, { status: err.status, headers: { "x-panta-mode": pantaMode() } });

@@ -4,13 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import type { Step } from "./actions";
 
-export type PantaResult<T> = T & { disclaimer?: string; _mode: "live" | "mock" };
+export type PantaResult<T> = T & { disclaimer?: string; _mode: "live" | "mock"; _trade: boolean };
 
 async function pantaFetch<T>(path: string, init?: RequestInit): Promise<PantaResult<T>> {
   const res = await fetch(`/api/panta/${path}`, init);
   const json = await res.json();
   if (!res.ok) throw Object.assign(new Error(json.message ?? res.statusText), { code: json.code });
-  return { ...json, _mode: res.headers.get("x-panta-mode") ?? "mock" };
+  return { ...json, _mode: res.headers.get("x-panta-mode") ?? "mock", _trade: res.headers.get("x-panta-trade") === "1" };
 }
 
 export const pantaGet = <T,>(path: string, query?: Record<string, string>) =>

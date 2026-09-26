@@ -82,6 +82,16 @@ export default function Hedge({ market, symbol }: { market: PantaResult<Market>;
         Holding ${symbol} is a bet on attention. Buy the outcome you&apos;re worried about and one of the two positions pays if the event goes against
         you.
       </p>
+      {market.phase !== "primary" ? (
+        <p className="notice small">
+          This market is past its primary sale, so new positions trade on{" "}
+          <a href="https://panta.market" target="_blank" rel="noreferrer">
+            panta.market ↗
+          </a>
+          . Live odds above.
+        </p>
+      ) : (
+        <>
       <div className="tabs" role="group" aria-label="Outcome">
         <button aria-pressed={side === "yes"} onClick={() => (setSide("yes"), setQuote(null))}>
           YES {market.yesPrice ? `· ${Number(market.yesPrice).toFixed(2)}` : ""}
@@ -107,7 +117,9 @@ export default function Hedge({ market, symbol }: { market: PantaResult<Market>;
           <dd className="num">{Number(quote.shares).toFixed(2)} USDC</dd>
         </dl>
       )}
-      {quote ? (
+      {quote && !quote._trade ? (
+        <p className="notice small">Live quote from Panta. Buying is switched off in this build.</p>
+      ) : quote ? (
         <button className={`btn btn-block ${side === "yes" ? "btn-yes" : "btn-no"}`} disabled={busy} onClick={confirm}>
           {busy ? "Confirming…" : `Buy ${side.toUpperCase()} for ${quote.amountUsdc} USDC`}
         </button>
@@ -115,6 +127,8 @@ export default function Hedge({ market, symbol }: { market: PantaResult<Market>;
         <button className="btn btn-block" disabled={busy || !(Number(amount) >= 1)} onClick={getQuote}>
           {!owner ? "Connect wallet" : busy ? "Quoting…" : "Get quote"}
         </button>
+      )}
+        </>
       )}
       {status && <p className="small" style={{ color: "var(--yes)" }}>{status}</p>}
       {error && <p className="small" style={{ color: "var(--no)" }}>{error}</p>}

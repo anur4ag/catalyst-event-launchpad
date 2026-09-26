@@ -4,8 +4,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { PublicKey } from "@solana/web3.js";
 import { curveTradeStep, dammTradeStep, graduateSteps, launchSteps, publishPresetStep } from "../lib/actions";
-import { getLaunch, metaUri } from "../lib/launches";
-import { panta, toUnix, type Market } from "../lib/panta";
+import { getLaunch, metaUri, suggestName, suggestSymbol } from "../lib/launches";
+import { panta, toUnix, type Market, isOpen } from "../lib/panta";
 import type { PresetId } from "../lib/presets";
 import { key } from "./keys";
 import { conn, fund, run } from "./util";
@@ -32,7 +32,7 @@ deployments[NETWORK] = configs;
 writeFileSync(path, `${JSON.stringify(deployments, null, 2)}\n`);
 
 const { items } = await panta<{ items: Market[] }>("GET", "markets/");
-const markets = await Promise.all(items.slice(0, 4).map((m) => panta<Market>("GET", `markets/${m.marketId}/`)));
+const markets = await Promise.all(items.filter(isOpen).slice(0, 4).map((m) => panta<Market>("GET", `markets/${m.marketId}/`)));
 console.log(`2. launches (${markets.length} Panta markets available)`);
 
 async function buyTo(pool: PublicKey, target: number) {
@@ -71,11 +71,11 @@ async function launch(preset: PresetId, name: string, symbol: string, market: Ma
 }
 
 const pick = (i: number) => markets[i % markets.length] ?? null;
-const sym = (m: Market | null, fallback: string) =>
-  m ? (m.title.toUpperCase().replace(/[^A-Z0-9 ]/g, "").split(/\s+/).filter((w) => w.length > 2 && w !== "WILL").slice(0, 2).join("").slice(0, 8) || fallback) : fallback;
+const sym = (m: Market | null, fallback: string) => (m && suggestSymbol(m.title).slice(0, 8)) || fallback;
+const nm = (m: Market | null, fallback: string) => (m ? suggestName(m.title) : fallback);
 
-await launch("event-horizon", (pick(0)?.title ?? "Event token").slice(0, 32), sym(pick(0), "EVENT"), pick(0), 0.45);
-await launch("event-horizon", (pick(1)?.title ?? "Graduated event").slice(0, 32), sym(pick(1), "GRAD") + "X", pick(1), "graduated");
+await launch("event-horizon", nm(pick(0), "Event token"), sym(pick(0), "EVENT"), pick(0), 0.45);
+await launch("event-horizon", nm(pick(1), "Graduated event"), sym(pick(1), "GRAD") + "X", pick(1), "graduated");
 await launch("parabolic", "Parabolic Pete", "PETE", null, 0.97);
 await launch("flat", "Fair Share", "FAIR", null, 0.2);
 await launch("long", "Long Haul", "HAUL", null, 0.05);

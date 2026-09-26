@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isAllowed, panta, positionValue, type BuyQuote, type Market } from "./panta";
+import { isAllowed, isOpen, panta, pantaKey, parseMarketAccount, positionValue, type BuyQuote, type Market } from "./panta";
 
 test("proxy allowlist blocks account and key management", () => {
   expect(isAllowed("GET", "markets/")).toBe(true);
@@ -22,7 +22,34 @@ test("a pk_live_ key can quote but cannot build trades unless PANTA_ALLOW_TRADE=
   process.env.PANTA_API_KEY = "pk_test_x";
   delete process.env.PANTA_ALLOW_TRADE;
   expect(isAllowed("POST", "primaryorderbuild/")).toBe(true); // sandbox
+  process.env.PANTA_API_KEY_LIVE = "pk_live_y"; // the live key wins for everything, so the gate is back
+  expect(pantaKey()).toBe("pk_live_y");
+  expect(isAllowed("POST", "primaryorderbuild/")).toBe(false);
+  process.env.PANTA_MODE = "sandbox";
+  expect(pantaKey()).toBe("pk_test_x");
+  expect(isAllowed("POST", "primaryorderbuild/")).toBe(true);
   process.env = saved;
+});
+
+test("market account parser reads the question and rule, and rejects garbage", () => {
+  const str = (s: string) => {
+    const b = Buffer.alloc(4 + Buffer.byteLength(s));
+    b.writeUInt32LE(Buffer.byteLength(s));
+    b.write(s, 4);
+    return b;
+  };
+  const acct = Buffer.concat([Buffer.alloc(328), str("Will GTA 6 release on November 19th, 2026"), str("Resolve YES if it ships on time. Else NO."), Buffer.alloc(64)]);
+  expect(parseMarketAccount(acct)).toEqual({ title: "Will GTA 6 release on November 19th, 2026", description: "Resolve YES if it ships on time. Else NO." });
+  expect(parseMarketAccount(Buffer.alloc(400))).toBeNull();
+  expect(parseMarketAccount(Buffer.concat([Buffer.alloc(328), Buffer.from([0xff, 0xff, 0, 0])]))).toBeNull();
+});
+
+test("isOpen keeps only markets still taking orders", () => {
+  const future = Math.floor(Date.now() / 1000) + 86_400;
+  expect(isOpen({ phase: "secondary", resolved: false, endTime: future })).toBe(true);
+  expect(isOpen({ phase: "primary", resolved: false, endTime: new Date(future * 1000).toISOString() })).toBe(true);
+  expect(isOpen({ phase: "resolved", resolved: true, endTime: future })).toBe(false);
+  expect(isOpen({ phase: "secondary", resolved: false, endTime: future - 2 * 86_400 })).toBe(false);
 });
 
 test("position value follows Panta's mark-to-market rules", () => {
@@ -35,6 +62,7 @@ test("position value follows Panta's mark-to-market rules", () => {
 
 test("mock mode runs the full hedge flow: list -> detail -> quote -> build -> submit -> positions", async () => {
   delete process.env.PANTA_API_KEY;
+  delete process.env.PANTA_API_KEY_LIVE;
   const { items } = await panta<{ items: Market[] }>("GET", "markets/");
   expect(items.length).toBeGreaterThan(3);
   expect(items.every((m) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(m.marketId))).toBe(true);

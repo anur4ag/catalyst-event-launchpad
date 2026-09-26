@@ -58,15 +58,18 @@ export class PantaError extends Error {
   }
 }
 
-export const pantaMode = (): "live" | "mock" =>
-  process.env.PANTA_API_KEY && process.env.PANTA_MODE !== "mock" ? "live" : "mock";
+/** PANTA_API_KEY_LIVE (mainnet catalog) wins over PANTA_API_KEY; PANTA_MODE=sandbox forces the test key. */
+export const pantaKey = () =>
+  process.env.PANTA_MODE === "sandbox" ? process.env.PANTA_API_KEY : (process.env.PANTA_API_KEY_LIVE ?? process.env.PANTA_API_KEY);
+
+export const pantaMode = (): "live" | "mock" => (pantaKey() && process.env.PANTA_MODE !== "mock" ? "live" : "mock");
 
 export const pantaLabel = () =>
-  pantaMode() === "mock"
-    ? "demo fixtures (no Panta key)"
-    : process.env.PANTA_API_KEY!.startsWith("pk_test_")
-      ? "Panta sandbox (test key, no mainnet)"
-      : "Panta mainnet";
+  pantaMode() === "mock" ? "demo fixtures (no Panta key)" : pantaKey()!.startsWith("pk_test_") ? "Panta sandbox (test key, no mainnet)" : "Panta mainnet";
+
+/** Still taking orders: not resolved, cancelled, or past its end time. */
+export const isOpen = (m: Pick<Market, "phase" | "resolved" | "endTime">) =>
+  (m.phase === "primary" || m.phase === "secondary") && !m.resolved && toUnix(m.endTime) > Date.now() / 1000;
 
 /** Paths the browser may reach through /api/panta. Account/key management is deliberately absent. */
 const ALLOWED: [method: string, pattern: RegExp][] = [
@@ -88,21 +91,83 @@ const REAL_MONEY = /^(primaryorder(build|submit|verify)|claim\/build|trades)\/$/
 
 export const isAllowed = (method: string, path: string) =>
   ALLOWED.some(([m, re]) => m === method && re.test(path)) &&
-  !(REAL_MONEY.test(path) && process.env.PANTA_API_KEY?.startsWith("pk_live_") && process.env.PANTA_ALLOW_TRADE !== "1");
+  !(REAL_MONEY.test(path) && pantaKey()?.startsWith("pk_live_") && process.env.PANTA_ALLOW_TRADE !== "1");
 
 /** Call Panta. `path` has no leading slash and keeps Panta's required trailing slash. */
 export async function panta<T>(method: "GET" | "POST", path: string, body?: unknown, query?: URLSearchParams): Promise<T> {
   if (pantaMode() === "mock") return mockPanta(method, path, body, query) as T;
+  if (method === "GET" && path === "markets/" && !query?.has("status")) {
+    // ponytail: cursor pages repeat rows and cap at 50, so union the unfiltered, primary and
+    // secondary views instead. Misses markets past the first 50 of each; fine at today's catalog size.
+    const views = await Promise.all(
+      ["", "primary", "secondary"].map((status) => {
+        const q = new URLSearchParams(query);
+        q.set("limit", "50");
+        if (status) q.set("status", status);
+        return call<{ items: Market[] }>("GET", path, undefined, q);
+      }),
+    );
+    return { ...views[0], items: await withTitles(dedupe(views.flatMap((v) => v.items))) } as T;
+  }
+  const json = await call<T>(method, path, body, query);
+  if (method === "GET" && /^markets\/[^/]+\/$/.test(path)) return ((await withTitles([json as Market]))[0] ?? json) as T;
+  return json;
+}
+
+async function call<T>(method: "GET" | "POST", path: string, body?: unknown, query?: URLSearchParams): Promise<T> {
   const qs = query?.toString();
   const res = await fetch(`${PANTA_BASE}/${path}${qs ? `?${qs}` : ""}`, {
     method,
-    headers: { "X-Api-Key": process.env.PANTA_API_KEY!, "Content-Type": "application/json" },
+    headers: { "X-Api-Key": pantaKey()!, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new PantaError(json.code ?? "INTERNAL_ERROR", json.message ?? res.statusText, res.status);
   return json as T;
+}
+
+// The mainnet catalog (pk_live_) often returns empty titles/descriptions and repeats rows across
+// pages. The question and resolution rule are also stored in each market's account on chain, so we
+// read them from there. Markets with no account (and so no title) are dropped from lists.
+const CHAIN_RPC = process.env.PANTA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+const QUESTION_OFFSET = 328; // borsh String question, then String rule, in Panta's market account
+const chainText = new Map<string, { title: string; description: string } | null>();
+
+const dedupe = (items: Market[]) => [...new Map(items.map((m) => [m.marketId, m])).values()];
+
+/** Reads [u32 len][utf8] twice from QUESTION_OFFSET; null unless both look like text. */
+export function parseMarketAccount(data: Buffer) {
+  const read = (at: number) => {
+    if (at + 4 > data.length) return null;
+    const end = at + 4 + data.readUInt32LE(at);
+    const s = end <= data.length ? data.subarray(at + 4, end).toString("utf8") : "";
+    return /^[^\x00-\x08\x0e-\x1f]{8,}$/.test(s) ? { s, end } : null;
+  };
+  const q = read(QUESTION_OFFSET);
+  const rule = q && read(q.end);
+  return q && rule ? { title: q.s.trim(), description: rule.s.trim() } : null;
+}
+
+async function withTitles(items: Market[]): Promise<Market[]> {
+  const missing = items.filter((m) => !(m.title && m.description) && !chainText.has(m.marketId)).map((m) => m.marketId);
+  for (let i = 0; i < missing.length; i += 100) {
+    const ids = missing.slice(i, i + 100);
+    const res = await fetch(CHAIN_RPC, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getMultipleAccounts", params: [ids, { encoding: "base64" }] }),
+    }).then((r) => r.json()).catch(() => null);
+    if (!res?.result) continue; // RPC hiccup: leave uncached, retry next call
+    res.result.value.forEach((a: { data: [string, string] } | null, j: number) =>
+      chainText.set(ids[j], a ? parseMarketAccount(Buffer.from(a.data[0], "base64")) : null),
+    );
+  }
+  return items.flatMap((m) => {
+    const t = chainText.get(m.marketId);
+    const title = m.title || t?.title;
+    return title ? [{ ...m, title, description: m.description || t?.description || "" }] : [];
+  });
 }
 
 /** Mark-to-market value of a position in USDC, per Panta's documented client-side estimate. */
