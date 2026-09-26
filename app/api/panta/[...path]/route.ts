@@ -10,7 +10,7 @@ async function handle(req: Request, { params }: { params: Promise<{ path: string
   const path = `${(await params).path.join("/")}/`;
   const method = req.method as "GET" | "POST";
   if (!isAllowed(method, path)) return Response.json({ code: "FORBIDDEN", message: `${method} ${path} is not exposed` }, { status: 403 });
-  if (!allow(req, PANTA_PER_MIN, PANTA_BURST)) return tooMany({ code: "RATE_LIMITED", message: "Too many requests; try again in a few seconds" });
+  if (!allow("panta", req, PANTA_PER_MIN, PANTA_BURST)) return tooMany({ code: "RATE_LIMITED", message: "Too many requests; try again in a few seconds" });
   const url = new URL(req.url);
   try {
     const body = method === "POST" ? await req.json() : undefined;

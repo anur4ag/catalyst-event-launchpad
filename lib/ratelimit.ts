@@ -3,15 +3,16 @@
 // times the instance count); move to Vercel's firewall or Upstash if abuse spreads across instances.
 const buckets = new Map<string, { tokens: number; at: number }>();
 
-/** Takes `cost` tokens from this IP's bucket (refills `perMin` a minute, holds `burst`); false when empty. */
-export function allow(req: Request, perMin: number, burst: number, cost = 1, now = Date.now()) {
+/** Takes `cost` tokens from this IP's `name` bucket (refills `perMin` a minute, holds `burst`); false when empty. */
+export function allow(name: string, req: Request, perMin: number, burst: number, cost = 1, now = Date.now()) {
   // Vercel overwrites both headers with the real client address, so a client can't pick its own.
   const ip = req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  const key = `${name} ${ip}`; // one bucket per limit, so the RPC and Panta limits never share tokens
   if (buckets.size > 50_000) buckets.clear(); // bounds memory; resetting everyone's bucket is harmless
-  const b = buckets.get(ip) ?? { tokens: burst, at: now };
+  const b = buckets.get(key) ?? { tokens: burst, at: now };
   b.tokens = Math.min(burst, b.tokens + ((now - b.at) / 60_000) * perMin);
   b.at = now;
-  buckets.set(ip, b);
+  buckets.set(key, b);
   if (b.tokens < cost) return false;
   b.tokens -= cost;
   return true;
