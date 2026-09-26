@@ -5,6 +5,7 @@
 - **Launchpad:** four curve presets with different price shapes, fee schedules and lock rules. They are real on-chain DBC configs.
 - **Preset marketplace:** anyone can publish a preset as a shared DBC config. The publisher becomes its `feeClaimer` and earns the partner share of every launch on it.
 - **Event data:** the Panta market's question, odds and resolution date appear on the token page. An optional hedge lets holders buy the outcome they are worried about.
+- **After graduation:** trading on the DAMM v2 pool, the locked LP positions with their claimable fees, and an optional Meteora DLMM range next to the pool. Trades route to whichever pool pays more.
 
 > Status: runs end to end on a local validator with cloned mainnet programs. Devnet deployment is in progress. Nothing is deployed to mainnet. Real-money Panta trading is switched off (see [Safety](#safety)).
 
@@ -15,20 +16,24 @@ flowchart LR
   subgraph Browser
     UI[Next.js app<br/>wallet adapter]
   end
-  subgraph Server["Next.js server (API key lives here only)"]
+  subgraph Server["Next.js server (keys live here only)"]
     P["/api/panta/* proxy<br/>allowlist + trade gate"]
     M["/api/meta/:market<br/>token metadata + avatar"]
+    R["/api/rpc<br/>RPC proxy, method allowlist"]
   end
   subgraph Solana["Solana (localnet / devnet)"]
     DBC[Meteora DBC<br/>curve + configs]
     DAMM[Meteora DAMM v2<br/>graduated pool + LP]
+    DLMM[Meteora DLMM<br/>optional range]
     MPL[Metaplex metadata<br/>uri carries market id]
   end
   PANTA[(Panta API<br/>mainnet catalog)]
   CHAIN[(Panta market accounts<br/>Solana mainnet)]
 
-  UI -- "sign txs from lib/actions.ts" --> DBC
-  UI --> DAMM
+  UI -- "txs built by lib/actions.ts,<br/>signed in the wallet" --> R
+  R --> DBC
+  R --> DAMM
+  R --> DLMM
   UI -- "odds, trades, hedge" --> P --> PANTA
   P -. "missing titles" .-> CHAIN
   MPL -- "uri" --> M
@@ -42,7 +47,9 @@ The launch lifecycle:
 3. **Launch.** The creator signs the config creation (Event Horizon only), then the pool plus their first buy (`createConfigAndPoolWithFirstBuy` / `createPoolWithFirstBuy`). The Metaplex `uri` is `https://<app>/api/meta/<pantaMarketId>?n=..&s=..`, so the link to the event is stored on-chain.
 4. **Trade on the curve.** `swapQuote2` / `swap2` in `PartialFill` mode, so the last buy before graduation is filled exactly and the rest refunded.
 5. **Graduate.** Anyone can press the button once the curve is full. It creates the vesting locker when the preset has creator vesting, then calls `migrateToDammV2`.
-6. **After graduation.** Trades go to DAMM v2 (`getQuote2` / `swap2`). The LP positions DBC minted keep their locks: permanent, or vesting that starts when the event resolves. They still earn fees, which holders can claim (`claimPositionFee2`). Creator and preset-author fees from the curve are claimable via `claimCreatorTradingFeeToReceiver` / `claimPartnerTradingFeeToReceiver`.
+6. **After graduation.** Trades go to DAMM v2 (`getQuote2` / `swap2`), or to DLMM if a pair is open and it quotes more. The LP positions DBC minted keep their locks: permanent, or vesting that starts when the event resolves. They still earn fees, which holders can claim (`claimPositionFee2`). Creator and preset-author fees from the curve are claimable via `claimCreatorTradingFeeToReceiver` / `claimPartnerTradingFeeToReceiver`.
+
+7. **DLMM range (optional).** Any holder can open a token/SOL DLMM pair (`createCustomizablePermissionlessLbPair2`). Its active bin is set to the DAMM v2 pool's current price, with 1% bins. They can then add a Spot range of ±10 bins (`initializePositionAndAddLiquidityByStrategy`). The trade box quotes both pools (`getQuote2` vs `swapQuote`) and sends the order to the one that pays more.
 
 **Launch discovery needs no database.** Every Catalyst config sets `leftoverReceiver` to the platform wallet. The home page finds configs with `getPoolConfigsByOwner` (DBC filters on that field), then pools with `getPoolsByConfig`. Each pool's Panta market comes from its Metaplex `uri`. See `lib/launches.ts`.
 
@@ -76,6 +83,7 @@ Keys: `PANTA_API_KEY_LIVE` (a `pk_live_` key) serves the mainnet catalog. `PANTA
 
 - The Panta API key is read only on the server (`lib/panta.ts`), never through `NEXT_PUBLIC_*`.
 - **Trade gate:** with a `pk_live_` key, any call past a quote (`primaryorderbuild/submit/verify`, `claim/build`, `trades`) returns 403 unless `PANTA_ALLOW_TRADE=1`. It is unset in every environment we run. On live markets the hedge box shows a quote, or a link to panta.market when the market is past its primary sale.
+- **RPC key:** the deployed app talks to Solana through `/api/rpc`. That route forwards an allowlist of JSON-RPC methods to the provider URL in `HELIUS_DEVNET_RPC_URL`, so the key is never sent to the browser. Confirmations poll over HTTP instead of using a websocket.
 - Throwaway keypairs for scripts live in `.keys/` (gitignored). Wallets in the app are the user's own, or a burner wallet on localnet only (`NEXT_PUBLIC_BURNER=1`).
 
 ## Run it locally
@@ -85,7 +93,7 @@ Prerequisites: [Bun](https://bun.sh) ≥ 1.3 and the Solana CLI (for `solana-tes
 ```bash
 bun install
 
-# 1. Local validator with DBC, DAMM v2, Metaplex, Locker and their config/authority accounts cloned from mainnet
+# 1. Local validator with DBC, DAMM v2, DLMM, Metaplex, Locker and their config/authority accounts cloned from mainnet
 ./scripts/localnet.sh            # keep running; it resets on each start
 
 # 2. Publish the static presets and seed demo launches (one graduated)
@@ -115,13 +123,15 @@ RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts      # full on-chain lifecycle 
 - buys to graduation, runs the locker and migration, then trades on DAMM v2;
 - claims creator and author fees;
 - checks that the LP locks match the preset (90% vesting from resolution, 10% permanent);
-- claims LP fees from the locked positions.
+- claims LP fees from the locked positions;
+- opens a DLMM pair at the DAMM v2 price, adds a range, checks both pools quote within 10% of each other, and trades on DLMM.
 
 ### Environment
 
 | Variable | Side | Default | Purpose |
 |---|---|---|---|
-| `NEXT_PUBLIC_RPC_URL` | client | devnet | Cluster for DBC / DAMM v2 |
+| `NEXT_PUBLIC_RPC_URL` | client | devnet | Cluster for DBC / DAMM v2 / DLMM. `/api/rpc` uses the server-side proxy. |
+| `HELIUS_DEVNET_RPC_URL` | server | – | Upstream for `/api/rpc` (contains the provider key) |
 | `NEXT_PUBLIC_NETWORK` | client | `devnet` | `localnet` / `devnet`; picks preset configs from `lib/deployments.json` |
 | `NEXT_PUBLIC_SCALE` | client | `0.01` | Market-cap multiplier for presets |
 | `NEXT_PUBLIC_PLATFORM` | client | `JE5w…uoF` | Platform wallet: `leftoverReceiver` on all configs, used for discovery |
@@ -138,12 +148,12 @@ RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts      # full on-chain lifecycle 
 
 ```
 lib/presets.ts      the four DBC presets (curve, fees, migration, LP split, vesting)
-lib/actions.ts      every on-chain action as unsigned tx steps: launch, trade, graduate, DAMM v2 trade/LP, fee claims, publish preset
+lib/actions.ts      every on-chain action as unsigned tx steps: launch, trade, graduate, DAMM v2 trade/LP, DLMM pair/range/swap, fee claims, publish preset
 lib/launches.ts     discovery (config → pools → Metaplex), metadata uri <-> market id
 lib/curve.ts        price curve sampling for charts
 lib/panta.ts        typed Panta client, allowlist, trade gate, catalog clean-up
 lib/panta-mock.ts   offline demo data
-app/                pages: launches, launch flow, token page, presets; API: panta proxy, token metadata
+app/                pages: launches, launch flow, token page, presets; API: panta proxy, RPC proxy, token metadata
 scripts/            localnet, seed, e2e
 ```
 
@@ -159,7 +169,8 @@ scripts/            localnet, seed, e2e
   - `pk_test_` keys return one sandbox market with ISO dates and no `avgPrice`. The client accepts both formats.
 - **Network.** Meteora programs run on localnet (cloned from mainnet) or devnet. Panta runs on mainnet. The event data is real, but tokens launched on devnet are test tokens.
 - **Scale.** Off mainnet, presets run at 0.5–1% of production market caps, so graduation is reachable with faucet SOL.
-- **Discovery.** It uses `getProgramAccounts` through the DBC SDK, so it needs an RPC that allows it.
+- **Discovery.** It uses `getProgramAccounts` through the DBC SDK, so it needs an RPC that allows it. The public devnet RPC was timing out on account reads while we built this, so the deploy uses a Helius devnet endpoint behind `/api/rpc`.
+- **RPC proxy.** It has a method allowlist but no per-IP rate limit.
 
 ---
 
