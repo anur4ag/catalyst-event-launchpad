@@ -1,7 +1,12 @@
 // Browser -> Solana RPC proxy, so the provider URL (it embeds an API key) stays server-side.
 // Set NEXT_PUBLIC_RPC_URL=/api/rpc and HELIUS_DEVNET_RPC_URL=<upstream> to use it.
-// ponytail: no per-IP rate limit, so anyone can spend the upstream's credits through the allowed
-// methods; add one (e.g. Upstash) if that happens.
+import { allow, tooMany } from "@/lib/ratelimit";
+
+// Per IP, counted per call in a batch. A minute of browsing makes about 60 calls and a launch about
+// 25 more; web3.js backs off and retries on 429.
+const RPC_PER_MIN = 120;
+const RPC_BURST = 240;
+
 const METHODS = new Set([
   "getAccountInfo",
   "getBalance",
@@ -46,6 +51,7 @@ export async function POST(req: Request) {
   // Index, not find(): a falsy entry (null, 0, "") must be refused, not read as "nothing denied".
   const denied = calls.findIndex((c) => typeof c?.method !== "string" || !METHODS.has(c.method));
   if (denied !== -1) return rpcError(403, `Method not allowed: ${String(calls[denied]?.method)}`);
+  if (!allow(req, RPC_PER_MIN, RPC_BURST, calls.length)) return tooMany({ jsonrpc: "2.0", id: null, error: { code: 429, message: "Too many requests, slow down" } });
   const res = await fetch(upstream, { method: "POST", headers: { "content-type": "application/json" }, body, cache: "no-store" });
   return new Response(res.body, { status: res.status, headers: { "content-type": "application/json" } });
 }

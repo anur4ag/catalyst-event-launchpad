@@ -7,7 +7,7 @@
 - **Event data:** the Panta market's question, odds and resolution date appear on the token page. An optional hedge lets holders buy the outcome they are worried about.
 - **After graduation:** trading on the DAMM v2 pool, the locked LP positions with their claimable fees, and an optional Meteora DLMM range next to the pool. Trades route to whichever pool pays more.
 
-> Status: runs end to end on a local validator with cloned mainnet programs. Devnet deployment is in progress. Nothing is deployed to mainnet. Real-money Panta trading is switched off (see [Safety](#safety)).
+> Status: live on Solana devnet at https://catalyst-event-launchpad.vercel.app, and runs end to end on a local validator with cloned mainnet programs. Nothing is deployed to mainnet. Real-money Panta trading is switched off (see [Safety](#safety)).
 
 ## How it works
 
@@ -17,9 +17,9 @@ flowchart LR
     UI[Next.js app<br/>wallet adapter]
   end
   subgraph Server["Next.js server (keys live here only)"]
-    P["/api/panta/* proxy<br/>allowlist + trade gate"]
+    P["/api/panta/* proxy<br/>allowlist + trade gate + per-IP limit"]
     M["/api/meta/:market<br/>token metadata + avatar"]
-    R["/api/rpc<br/>RPC proxy, method allowlist"]
+    R["/api/rpc<br/>RPC proxy, method allowlist + per-IP limit"]
   end
   subgraph Solana["Solana (localnet / devnet)"]
     DBC[Meteora DBC<br/>curve + configs]
@@ -84,6 +84,7 @@ Keys: `PANTA_API_KEY_LIVE` (a `pk_live_` key) serves the mainnet catalog. `PANTA
 - The Panta API key is read only on the server (`lib/panta.ts`), never through `NEXT_PUBLIC_*`.
 - **Trade gate:** with a `pk_live_` key, any call past a quote (`primaryorderbuild/submit/verify`, `claim/build`, `trades`) returns 403 unless `PANTA_ALLOW_TRADE=1`. It is unset in every environment we run. On live markets the hedge box shows a quote, or a link to panta.market when the market is past its primary sale.
 - **RPC key:** the deployed app talks to Solana through `/api/rpc`. That route forwards an allowlist of JSON-RPC methods to the provider URL in `HELIUS_DEVNET_RPC_URL`, so the key is never sent to the browser. Confirmations poll over HTTP instead of using a websocket.
+- **Rate limits:** `/api/rpc` allows each IP 120 calls a minute (bursts up to 240; every call in a batch counts). `/api/panta/*` allows 30 requests a minute (bursts up to 60). Over the limit, the routes answer 429 without calling the provider.
 - Throwaway keypairs for scripts live in `.keys/` (gitignored). Wallets in the app are the user's own, or a burner wallet on localnet only (`NEXT_PUBLIC_BURNER=1`).
 
 ## Run it locally
@@ -170,7 +171,7 @@ scripts/            localnet, seed, e2e
 - **Network.** Meteora programs run on localnet (cloned from mainnet) or devnet. Panta runs on mainnet. The event data is real, but tokens launched on devnet are test tokens.
 - **Scale.** Off mainnet, presets run at 0.5–1% of production market caps, so graduation is reachable with faucet SOL.
 - **Discovery.** It uses `getProgramAccounts` through the DBC SDK, so it needs an RPC that allows it. The public devnet RPC was timing out on account reads while we built this, so the deploy uses a Helius devnet endpoint behind `/api/rpc`.
-- **RPC proxy.** It has a method allowlist but no per-IP rate limit.
+- **Rate limits.** The per-IP limits live in each server instance's memory, so the real ceiling grows with the number of instances, and many IPs together can still use up the provider quota.
 
 ---
 
