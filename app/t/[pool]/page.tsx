@@ -10,10 +10,14 @@ import {
   claimPartnerFeesStep,
   clients,
   curveQuote,
+  claimLpFeesStep,
   curveTradeStep,
   dammPoolFor,
+  dammPositions,
+  dammQuote,
   dammTradeStep,
   graduateSteps,
+  type LpPosition,
 } from "@/lib/actions";
 import { explorer } from "@/lib/config";
 import { fmtSol, friendly, pantaGet, pct, useLoad, useSendSteps } from "@/lib/client";
@@ -109,6 +113,8 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
             )}
           </section>
 
+          {dammPool && <LpCard dammPool={dammPool} creator={l.creator} author={cfg.feeClaimer.toBase58()} onClaim={send} busy={busy} />}
+
           {marketId && (
             <section className="card stack">
               <div className="row between">
@@ -121,7 +127,7 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
                   <Odds yes={market.data.yesPrice ? Number(market.data.yesPrice) : null} />
                   <div className="row small muted" style={{ flexWrap: "wrap" }}>
                     <span>Resolves {fmtDate(toUnix(market.data.resolutionTime))}</span>
-                    <span>· {market.data.volumeUsdc} USDC volume</span>
+                    <span>· {Number(market.data.volumeUsdc).toLocaleString(undefined, { maximumFractionDigits: 0 })} USDC volume</span>
                     <span>· {market.data.phase}</span>
                   </div>
                   <div className="list small">
@@ -137,7 +143,7 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
                         </div>
                       );
                     })}
-                    {tape.data && !tape.data.items.length && <span className="muted">No trades on this market yet.</span>}
+                    {tape.data && !tape.data.items.length && <span className="muted">No recent trades returned by Panta.</span>}
                   </div>
                   <DataSourceNote mode={market.data._mode} disclaimer={market.data.disclaimer} />
                 </>
@@ -229,9 +235,14 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
   }, [owner?.toBase58(), props.busy]);
 
   const quote = useLoad(async () => {
-    if (!(n > 0) || props.dammPool) return null;
+    if (!(n > 0)) return null;
+    if (props.dammPool) {
+      const { quote, feeLamports } = await dammQuote(connection, new PublicKey(props.dammPool), side, n);
+      return { out: quote.outputAmount, fee: feeLamports, unfilled: 0, impact: quote.priceImpact.toNumber() };
+    }
     const { quote } = await curveQuote(connection, new PublicKey(props.pool), side, n);
-    return quote;
+    // All Catalyst presets collect fees in the quote token (SOL), on the way in for buys and out for sells.
+    return { out: quote.outputAmount, fee: Number(quote.tradingFee.add(quote.protocolFee).toString()), unfilled: Number(quote.amountLeft.toString()), impact: null };
   }, [side, amount, props.dammPool, props.busy]);
 
   async function trade() {
@@ -247,9 +258,8 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
     }
   }
 
-  const out = quote.data ? Number(quote.data.outputAmount.toString()) / (side === "buy" ? 1e6 : 1e9) : null;
-  // All Catalyst presets collect fees in the quote token (SOL), on the way in for buys and out for sells.
-  const fee = quote.data ? Number(quote.data.tradingFee.add(quote.data.protocolFee).toString()) / 1e9 : null;
+  const q = quote.data;
+  const out = q ? Number(q.out.toString()) / (side === "buy" ? 1e6 : 1e9) : null;
 
   return (
     <div className="card stack">
@@ -281,11 +291,17 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
           <dt>You get about</dt>
           <dd className="num">{side === "buy" ? `${out.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${props.symbol}` : `${out.toFixed(4)} SOL`}</dd>
           <dt>Fee</dt>
-          <dd className="num">{fee!.toFixed(4)} SOL</dd>
-          {side === "buy" && !quote.data!.amountLeft.isZero() && (
+          <dd className="num">{fmtSol(q!.fee, 4)} SOL</dd>
+          {q!.impact !== null && (
+            <>
+              <dt>Price impact</dt>
+              <dd className="num">{q!.impact.toFixed(2)}%</dd>
+            </>
+          )}
+          {side === "buy" && q!.unfilled > 0 && (
             <>
               <dt>Unfilled (curve completes)</dt>
-              <dd className="num">{fmtSol(Number(quote.data!.amountLeft.toString()), 4)} SOL refunded</dd>
+              <dd className="num">{fmtSol(q!.unfilled, 4)} SOL refunded</dd>
             </>
           )}
         </dl>
@@ -295,5 +311,56 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
       </button>
       {error && <p className="small" style={{ color: "var(--no)" }}>{error}</p>}
     </div>
+  );
+}
+
+function LpCard(props: { dammPool: PublicKey; creator: string; author: string; onClaim: ReturnType<typeof useSendSteps>["send"]; busy: boolean }) {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+  const me = wallet.publicKey?.toBase58();
+  const lp = useLoad(async () => {
+    const [positions, probe] = await Promise.all([dammPositions(connection, props.dammPool), dammQuote(connection, props.dammPool, "buy", 0.01)]);
+    return { positions, fee: probe.feeLamports / 1e7 }; // fee share of a 0.01 SOL buy
+  }, [props.dammPool.toBase58(), props.busy]);
+  const now = Date.now() / 1000;
+  const who = (o: string | null) => (o === props.creator ? "Creator" : o === props.author ? "Preset author" : o ? short(o) : "unknown");
+  const lock = (p: LpPosition) =>
+    p.permanent
+      ? "Locked forever"
+      : !p.vesting
+        ? "Unlocked"
+        : now < p.vesting.start
+          ? `Locked until ${fmtDate(p.vesting.start)}, vests by ${fmtDate(p.vesting.end)}`
+          : now < p.vesting.end
+            ? `Vesting until ${fmtDate(p.vesting.end)}`
+            : "Fully vested";
+
+  return (
+    <section className="card stack">
+      <div className="row between">
+        <div className="section-title" style={{ margin: 0 }}>DAMM v2 liquidity</div>
+        {lp.data && <span className="small muted num">fee now {(lp.data.fee * 100).toFixed(2)}%</span>}
+      </div>
+      <p className="small muted">Positions minted at graduation. Locked liquidity still earns trading fees for whoever holds the position.</p>
+      <div className="list small">
+        {lp.data?.positions.map((p) => (
+          <div key={p.position.toBase58()} className="row between num" style={{ flexWrap: "wrap", gap: 8 }}>
+            <span style={{ minWidth: 110 }}>
+              {who(p.owner)} · {Math.round(p.share * 100)}%
+            </span>
+            <span className="muted" style={{ flex: 1 }}>{lock(p)}</span>
+            {me && me === p.owner && p.feeLamports > 0 ? (
+              <button className="btn btn-sm" disabled={props.busy} onClick={async () => props.onClaim([await claimLpFeesStep(connection, wallet.publicKey!, props.dammPool, p)]).catch(() => {})}>
+                Claim {fmtSol(p.feeLamports, 4)} SOL
+              </button>
+            ) : (
+              <span>{fmtSol(p.feeLamports, 4)} SOL fees</span>
+            )}
+          </div>
+        ))}
+        {lp.loading && !lp.data && <span className="muted">Loading positions…</span>}
+        {lp.error && <span className="muted">{lp.error}</span>}
+      </div>
+    </section>
   );
 }

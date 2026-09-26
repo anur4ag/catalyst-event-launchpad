@@ -2,13 +2,15 @@
 // or devnet), using the same lib/actions.ts the web app uses:
 //   static preset: publish shared config -> launch on it
 //   event-horizon: per-launch config + first buy -> buy to graduation -> locker -> DAMM v2
-//   -> trade on DAMM v2 -> partner + creator fee claims
+//   -> trade on DAMM v2 -> LP locks as configured -> DBC fee claims + DAMM v2 LP fee claims
 //   RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts
 import {
   claimCreatorFeesStep,
+  claimLpFeesStep,
   claimPartnerFeesStep,
   clients,
   curveTradeStep,
+  dammPositions,
   dammTradeStep,
   graduateSteps,
   launchSteps,
@@ -43,9 +45,10 @@ if (import.meta.main) {
 
   console.log("2. event-horizon launch");
   const market = "MockBTC15ckDec31aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const resolutionTime = Math.floor(Date.now() / 1000) + 7 * 86_400;
   const eh = await launchSteps(conn, {
     preset: "event-horizon", creator: creator.publicKey, platform: platform.publicKey, scale: SCALE,
-    resolutionTime: Math.floor(Date.now() / 1000) + 7 * 86_400,
+    resolutionTime,
     name: "BTC 150K", symbol: "BTC150K", uri: uri(market), firstBuySol: 0.05,
   });
   for (const s of eh.steps) await run(s, creator);
@@ -81,5 +84,17 @@ if (import.meta.main) {
   console.log(`  partner ${fees.partner.unclaimedQuoteFee.toNumber() / 1e9} SOL, creator ${fees.creator.unclaimedQuoteFee.toNumber() / 1e9} SOL`);
   await run(await claimPartnerFeesStep(conn, platform.publicKey, eh.pool), platform);
   await run(await claimCreatorFeesStep(conn, creator.publicKey, eh.pool), creator);
+
+  console.log("7. DAMM v2 LP positions: locks match the preset, fees claimable while locked");
+  const lps = await dammPositions(conn, grad.dammPool);
+  const mine = (k: typeof creator) => lps.find((p) => p.owner === k.publicKey.toBase58())!;
+  const [c, a] = [mine(creator), mine(platform)];
+  assert(c && Math.round(c.share * 100) === 90 && c.vesting && c.vesting.start >= resolutionTime - 60, "creator LP: 90%, vesting starts after the event resolves");
+  assert(a && a.permanent && Math.round(a.share * 100) === 10, "preset author LP: 10%, permanently locked");
+  for (const [p, k] of [[c, creator], [a, platform]] as const) {
+    assert(p.feeLamports > 0, "locked LP has earned fees");
+    await run(await claimLpFeesStep(conn, k.publicKey, grad.dammPool, p), k);
+  }
+  assert((await dammPositions(conn, grad.dammPool)).every((p) => p.feeLamports === 0), "LP fees claimed");
   console.log("done ✓");
 }

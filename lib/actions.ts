@@ -12,7 +12,7 @@ import {
   getCurrentPoint as dbcCurrentPoint,
   SwapMode,
 } from "@meteora-ag/dynamic-bonding-curve-sdk";
-import { CpAmm, getCurrentPoint, getTokenProgram, SwapMode as DammSwapMode } from "@meteora-ag/cp-amm-sdk";
+import { CpAmm, derivePositionNftAccount, getCurrentPoint, getTokenProgram, getUnClaimLpFee, SwapMode as DammSwapMode } from "@meteora-ag/cp-amm-sdk";
 import { PRESETS, type PresetId } from "./presets";
 
 export type Step = { label: string; tx: Transaction; signers: Keypair[] };
@@ -147,15 +147,14 @@ export async function dammPoolFor(conn: Connection, pool: PublicKey) {
   return deriveDammV2PoolAddress(DAMM_V2_MIGRATION_FEE_ADDRESS[cfg.migrationFeeOption], vp.baseMint, cfg.quoteMint);
 }
 
-/** Trade on the graduated DAMM v2 pool. buy: SOL in; sell: tokens in. */
-export async function dammTradeStep(conn: Connection, owner: PublicKey, dammPool: PublicKey, side: "buy" | "sell", amount: number, slippagePct = 1): Promise<Step & { out: BN }> {
+/** Quote a trade on the graduated DAMM v2 pool. buy: SOL in; sell: tokens in. */
+export async function dammQuote(conn: Connection, dammPool: PublicKey, side: "buy" | "sell", amount: number, slippagePct = 1) {
   const { damm } = clients(conn);
   const ps = await damm.fetchPoolState(dammPool);
   const buy = side === "buy";
-  const input = buy ? ps.tokenBMint : ps.tokenAMint;
   const amountIn = buy ? sol(amount) : new BN(Math.round(amount * 1e6));
-  const q = damm.getQuote2({
-    inputTokenMint: input,
+  const quote = damm.getQuote2({
+    inputTokenMint: buy ? ps.tokenBMint : ps.tokenAMint,
     slippage: slippagePct,
     currentPoint: await getCurrentPoint(conn, ps.activationType),
     poolState: ps,
@@ -165,10 +164,19 @@ export async function dammTradeStep(conn: Connection, owner: PublicKey, dammPool
     swapMode: DammSwapMode.ExactIn,
     amountIn,
   });
+  // Catalyst pools collect fees in SOL (token B) only.
+  const feeLamports = Number(quote.claimingFee.add(quote.protocolFee).add(quote.compoundingFee).add(quote.referralFee).toString());
+  return { ps, quote, amountIn, feeLamports };
+}
+
+export async function dammTradeStep(conn: Connection, owner: PublicKey, dammPool: PublicKey, side: "buy" | "sell", amount: number, slippagePct = 1): Promise<Step & { out: BN }> {
+  const { damm } = clients(conn);
+  const { ps, quote, amountIn } = await dammQuote(conn, dammPool, side, amount, slippagePct);
+  const buy = side === "buy";
   const tx = await damm.swap2({
     payer: owner,
     pool: dammPool,
-    inputTokenMint: input,
+    inputTokenMint: buy ? ps.tokenBMint : ps.tokenAMint,
     outputTokenMint: buy ? ps.tokenAMint : ps.tokenBMint,
     tokenAMint: ps.tokenAMint,
     tokenBMint: ps.tokenBMint,
@@ -179,9 +187,64 @@ export async function dammTradeStep(conn: Connection, owner: PublicKey, dammPool
     referralTokenAccount: null,
     swapMode: DammSwapMode.ExactIn,
     amountIn,
-    minimumAmountOut: q.minimumAmountOut ?? new BN(1),
+    minimumAmountOut: quote.minimumAmountOut ?? new BN(1),
   });
-  return { label: buy ? "Buy on DAMM v2" : "Sell on DAMM v2", tx, signers: [], out: q.outputAmount };
+  return { label: buy ? "Buy on DAMM v2" : "Sell on DAMM v2", tx, signers: [], out: quote.outputAmount };
+}
+
+export type LpPosition = {
+  position: PublicKey;
+  nftAccount: PublicKey;
+  owner: string | null;
+  share: number; // of pool liquidity
+  permanent: boolean;
+  vesting: { start: number; end: number } | null; // unix seconds
+  feeLamports: number; // unclaimed, SOL side
+};
+
+/** The LP positions DBC minted at graduation, with who holds them, their locks and unclaimed fees. */
+export async function dammPositions(conn: Connection, dammPool: PublicKey): Promise<LpPosition[]> {
+  const { damm } = clients(conn);
+  const [ps, positions] = await Promise.all([damm.fetchPoolState(dammPool), damm.getAllPositionsByPool(dammPool)]);
+  const nftAccounts = positions.map((p) => derivePositionNftAccount(p.account.nftMint));
+  const holders = await conn.getMultipleParsedAccounts(nftAccounts);
+  return positions
+    .map(({ publicKey, account: a }, i) => {
+      const liq = a.unlockedLiquidity.add(a.vestedLiquidity).add(a.permanentLockedLiquidity);
+      const v = a.innerVesting;
+      const start = Number(v.cliffPoint.toString());
+      const data = holders.value[i]?.data;
+      return {
+        position: publicKey,
+        nftAccount: nftAccounts[i],
+        owner: data && "parsed" in data ? (data.parsed.info.owner as string) : null,
+        share: Number(liq.muln(10_000).div(ps.liquidity).toString()) / 10_000,
+        permanent: !a.permanentLockedLiquidity.isZero(),
+        vesting: a.vestedLiquidity.isZero() ? null : { start, end: start + Number(v.periodFrequency.toString()) * v.numberOfPeriod },
+        feeLamports: Number(getUnClaimLpFee(ps, a).feeTokenB.toString()),
+      };
+    })
+    .sort((x, y) => y.share - x.share);
+}
+
+/** LP fees keep flowing to position holders even while the liquidity itself is locked. */
+export async function claimLpFeesStep(conn: Connection, owner: PublicKey, dammPool: PublicKey, p: Pick<LpPosition, "position" | "nftAccount">): Promise<Step> {
+  const { damm } = clients(conn);
+  const ps = await damm.fetchPoolState(dammPool);
+  const tx = await damm.claimPositionFee2({
+    owner,
+    pool: dammPool,
+    position: p.position,
+    positionNftAccount: p.nftAccount,
+    tokenAMint: ps.tokenAMint,
+    tokenBMint: ps.tokenBMint,
+    tokenAVault: ps.tokenAVault,
+    tokenBVault: ps.tokenBVault,
+    tokenAProgram: getTokenProgram(ps.tokenAFlag),
+    tokenBProgram: getTokenProgram(ps.tokenBFlag),
+    receiver: owner,
+  });
+  return { label: "Claim LP fees", tx, signers: [] };
 }
 
 export async function claimPartnerFeesStep(conn: Connection, feeClaimer: PublicKey, pool: PublicKey): Promise<Step> {
