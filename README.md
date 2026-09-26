@@ -153,6 +153,7 @@ scripts/            localnet, seed, e2e
   - Market list rows often have empty `title` and `description`. We read the question and resolution rule from the market's on-chain account. Markets with no on-chain account are hidden.
   - `nextCursor` pages repeat earlier rows, and a page holds at most 50 rows. We merge the unfiltered, `status=primary` and `status=secondary` views and remove duplicates. Markets beyond those views are not listed.
   - `phase=` has no effect as a filter. We filter open markets ourselves.
+  - List and detail can disagree for the same market. For example, the list shows `secondary` with prices while the detail shows `primary` with null prices. When the detail has no prices, we use the list row's phase and prices.
   - `markets/{id}/trades/` returned no rows, even for markets with volume, so the trade tape is often empty.
   - The hedge only buys during a market's primary sale (`primaryorder*`). The open markets we saw were all past it, so on live data the hedge box shows odds and a link to panta.market.
   - `pk_test_` keys return one sandbox market with ISO dates and no `avgPrice`. The client accepts both formats.

@@ -81,6 +81,7 @@ export function friendly(e: unknown): string {
   if (/User rejected|rejected the request/i.test(m)) return "Cancelled in wallet";
   if (/insufficient lamports|0x1\b|insufficient funds|no record of a prior credit/i.test(m)) return "Not enough SOL";
   if (/0x1772|ExceededSlippage/i.test(m)) return "Price moved; try again";
+  if (/MARKET_NOT_IN_PRIMARY|INVALID_MARKET_PARAMS/.test(`${m} ${(e as { code?: string })?.code}`)) return "Panta isn't taking primary orders on this market";
   return m.length > 140 ? `${m.slice(0, 140)}…` : m;
 }
 

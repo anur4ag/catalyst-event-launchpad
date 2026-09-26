@@ -96,22 +96,37 @@ export const isAllowed = (method: string, path: string) =>
 /** Call Panta. `path` has no leading slash and keeps Panta's required trailing slash. */
 export async function panta<T>(method: "GET" | "POST", path: string, body?: unknown, query?: URLSearchParams): Promise<T> {
   if (pantaMode() === "mock") return mockPanta(method, path, body, query) as T;
-  if (method === "GET" && path === "markets/" && !query?.has("status")) {
-    // ponytail: cursor pages repeat rows and cap at 50, so union the unfiltered, primary and
-    // secondary views instead. Misses markets past the first 50 of each; fine at today's catalog size.
-    const views = await Promise.all(
-      ["", "primary", "secondary"].map((status) => {
-        const q = new URLSearchParams(query);
-        q.set("limit", "50");
-        if (status) q.set("status", status);
-        return call<{ items: Market[] }>("GET", path, undefined, q);
-      }),
-    );
-    return { ...views[0], items: await withTitles(dedupe(views.flatMap((v) => v.items))) } as T;
-  }
+  if (method === "GET" && path === "markets/" && !query?.has("status")) return (await catalog(query)) as T;
   const json = await call<T>(method, path, body, query);
-  if (method === "GET" && /^markets\/[^/]+\/$/.test(path)) return ((await withTitles([json as Market]))[0] ?? json) as T;
+  if (method === "GET" && /^markets\/[^/]+\/$/.test(path)) {
+    let m = json as Market;
+    // Detail sometimes has null prices (and a different phase) where the list row has live prices;
+    // show the list row's view so the token page agrees with the market the user picked.
+    const row = m.yesPrice == null ? (await catalog()).items.find((r) => r.marketId === m.marketId) : undefined;
+    if (row?.yesPrice != null) m = { ...m, phase: row.phase, status: row.status, yesPrice: row.yesPrice, noPrice: row.noPrice };
+    return ((await withTitles([m]))[0] ?? m) as T;
+  }
   return json;
+}
+
+let cached: { at: number; data: { items: Market[] } } | null = null;
+
+/** Market list. Cursor pages repeat rows and cap at 50, so union the unfiltered, primary and secondary views. */
+async function catalog(query?: URLSearchParams) {
+  const plain = !query?.toString();
+  if (plain && cached && Date.now() - cached.at < 60_000) return cached.data;
+  // ponytail: misses markets past the first 50 of each view; fine at today's catalog size.
+  const views = await Promise.all(
+    ["", "primary", "secondary"].map((status) => {
+      const q = new URLSearchParams(query);
+      q.set("limit", "50");
+      if (status) q.set("status", status);
+      return call<{ items: Market[] }>("GET", "markets/", undefined, q);
+    }),
+  );
+  const data = { ...views[0], items: await withTitles(dedupe(views.flatMap((v) => v.items))) };
+  if (plain) cached = { at: Date.now(), data };
+  return data;
 }
 
 async function call<T>(method: "GET" | "POST", path: string, body?: unknown, query?: URLSearchParams): Promise<T> {
