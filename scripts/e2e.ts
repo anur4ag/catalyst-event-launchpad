@@ -4,7 +4,6 @@
 //   event-horizon: per-launch config + first buy -> buy to graduation -> locker -> DAMM v2
 //   -> trade on DAMM v2 -> partner + creator fee claims
 //   RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts
-import { Connection, Keypair, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
   claimCreatorFeesStep,
   claimPartnerFeesStep,
@@ -14,29 +13,15 @@ import {
   graduateSteps,
   launchSteps,
   publishPresetStep,
-  type Step,
 } from "../lib/actions";
 import { getLaunch, listLaunches } from "../lib/launches";
 import { key } from "./keys";
+import { conn, fund, RPC, run } from "./util";
 
-const RPC = process.env.RPC_URL ?? "http://127.0.0.1:8899";
-const conn = new Connection(RPC, "confirmed");
 const platform = key("partner");
 const creator = key("creator");
 const trader = key("trader");
 const SCALE = Number(process.env.SCALE ?? 0.01);
-
-export async function run(step: Step, payer: Keypair) {
-  step.tx.feePayer = payer.publicKey;
-  const sig = await sendAndConfirmTransaction(conn, step.tx, [payer, ...step.signers], { commitment: "confirmed" });
-  console.log(`  ✓ ${step.label} ${sig.slice(0, 12)}…`);
-  return sig;
-}
-
-async function fund(kp: Keypair, amount: number) {
-  if ((await conn.getBalance(kp.publicKey)) >= amount * LAMPORTS_PER_SOL) return;
-  await conn.confirmTransaction(await conn.requestAirdrop(kp.publicKey, amount * LAMPORTS_PER_SOL), "confirmed");
-}
 
 const assert = (ok: unknown, msg: string) => {
   if (!ok) throw new Error(`assertion failed: ${msg}`);

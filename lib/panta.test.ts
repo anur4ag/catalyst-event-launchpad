@@ -10,6 +10,21 @@ test("proxy allowlist blocks account and key management", () => {
   expect(isAllowed("GET", "markets/../account/")).toBe(false);
 });
 
+test("a pk_live_ key can quote but cannot build trades unless PANTA_ALLOW_TRADE=1", () => {
+  const saved = { ...process.env };
+  process.env.PANTA_API_KEY = "pk_live_x";
+  delete process.env.PANTA_ALLOW_TRADE;
+  expect(isAllowed("POST", "primaryorderquote/")).toBe(true);
+  expect(isAllowed("POST", "primaryorderbuild/")).toBe(false);
+  expect(isAllowed("POST", "claim/build/")).toBe(false);
+  process.env.PANTA_ALLOW_TRADE = "1";
+  expect(isAllowed("POST", "primaryorderbuild/")).toBe(true);
+  process.env.PANTA_API_KEY = "pk_test_x";
+  delete process.env.PANTA_ALLOW_TRADE;
+  expect(isAllowed("POST", "primaryorderbuild/")).toBe(true); // sandbox
+  process.env = saved;
+});
+
 test("position value follows Panta's mark-to-market rules", () => {
   const m = { yesPrice: "0.52", noPrice: "0.48" };
   expect(positionValue({ side: "yes", shares: "38.40", outcome: null }, m)).toBeCloseTo(19.968);

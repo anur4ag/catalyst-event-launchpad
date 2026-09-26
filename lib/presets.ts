@@ -38,6 +38,8 @@ export type Preset = {
   name: string;
   tagline: string;
   eventLinked: boolean;
+  /** Plain-language summary of the config, shown in the marketplace. */
+  facts: string[];
   /** Market caps in SOL at scale 1. */
   initialMcap: number;
   migrationMcap: number;
@@ -99,6 +101,12 @@ export const PRESETS: Record<PresetId, Preset> = {
   "event-horizon": make(
     {
       id: "event-horizon",
+      facts: [
+        "Anti-sniper fee 50% → 1% over 15 min (exponential), plus a volatility fee",
+        "Creator's 10% allocation unlocks only after the event resolves, then vests over 30 days",
+        "90% of LP vests to the creator from the same date; 10% is locked forever",
+        "Graduated pool fee falls 2% → 0.25% as market cap grows 10×",
+      ],
       name: "Event Horizon",
       tagline: "Creator tokens and LP stay locked until the linked event resolves.",
       eventLinked: true,
@@ -166,6 +174,12 @@ export const PRESETS: Record<PresetId, Preset> = {
   flat: make(
     {
       id: "flat",
+      facts: [
+        "Price moves only 1.5× across the whole curve: early and late buyers pay about the same",
+        "Flat 1% fee, no anti-sniper ramp",
+        "Graduates into a compounding DAMM v2 pool: half of LP fees are reinvested",
+        "50% of LP locked forever, 50% to the creator",
+      ],
       name: "Flat",
       tagline: "Near-constant price (1.5x start to graduation). Fair distribution; graduates into a compounding pool.",
       eventLinked: false,
@@ -209,6 +223,11 @@ export const PRESETS: Record<PresetId, Preset> = {
   long: make(
     {
       id: "long",
+      facts: [
+        "1000× from first buy to graduation with even depth: a long runway",
+        "Fee tapers 20% → 1% over the first hour, plus a volatility fee",
+        "50% of LP locked forever (20% author, 30% creator), 50% to the creator",
+      ],
       name: "Long Curve",
       tagline: "1000x from start to graduation with even depth. Long runway; fees taper over an hour.",
       eventLinked: false,
@@ -251,6 +270,11 @@ export const PRESETS: Record<PresetId, Preset> = {
   parabolic: make(
     {
       id: "parabolic",
+      facts: [
+        "Liquidity thins 20% per segment, so each SOL moves price more than the last",
+        "Fee 30% → 1.5% over 10 min (exponential), plus a volatility fee",
+        "All LP locked forever after graduation",
+      ],
       name: "Parabolic",
       tagline: "Liquidity thins as price rises, so the curve accelerates into graduation.",
       eventLinked: false,

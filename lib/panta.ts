@@ -61,6 +61,13 @@ export class PantaError extends Error {
 export const pantaMode = (): "live" | "mock" =>
   process.env.PANTA_API_KEY && process.env.PANTA_MODE !== "mock" ? "live" : "mock";
 
+export const pantaLabel = () =>
+  pantaMode() === "mock"
+    ? "demo fixtures (no Panta key)"
+    : process.env.PANTA_API_KEY!.startsWith("pk_test_")
+      ? "Panta sandbox (test key, no mainnet)"
+      : "Panta mainnet";
+
 /** Paths the browser may reach through /api/panta. Account/key management is deliberately absent. */
 const ALLOWED: [method: string, pattern: RegExp][] = [
   ["GET", /^categories\/$/],
@@ -75,7 +82,13 @@ const ALLOWED: [method: string, pattern: RegExp][] = [
 // Market creation spends ~50 USDC per market on mainnet: opt-in only.
 if (process.env.PANTA_ALLOW_CREATE === "1") ALLOWED.push(["POST", /^markets\/(create\/(quote|build)|register)\/$/]);
 
-export const isAllowed = (method: string, path: string) => ALLOWED.some(([m, re]) => m === method && re.test(path));
+// pk_test_ keys hit Panta's sandbox (empty instructions, no mainnet). With a pk_live_ key, anything
+// past a quote moves real USDC, so it also needs PANTA_ALLOW_TRADE=1.
+const REAL_MONEY = /^(primaryorder(build|submit|verify)|claim\/build|trades)\/$/;
+
+export const isAllowed = (method: string, path: string) =>
+  ALLOWED.some(([m, re]) => m === method && re.test(path)) &&
+  !(REAL_MONEY.test(path) && process.env.PANTA_API_KEY?.startsWith("pk_live_") && process.env.PANTA_ALLOW_TRADE !== "1");
 
 /** Call Panta. `path` has no leading slash and keeps Panta's required trailing slash. */
 export async function panta<T>(method: "GET" | "POST", path: string, body?: unknown, query?: URLSearchParams): Promise<T> {

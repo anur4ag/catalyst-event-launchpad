@@ -1,0 +1,18 @@
+// Client-visible settings. DBC/DAMM run on NEXT_PUBLIC_RPC_URL (localnet or devnet); Panta is
+// mainnet-only and reached through the /api/panta proxy.
+import deployments from "./deployments.json";
+import type { PresetId } from "./presets";
+
+export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+export const NETWORK = process.env.NEXT_PUBLIC_NETWORK ?? "devnet";
+/** Platform wallet: leftoverReceiver on every Catalyst config, which makes launches discoverable. */
+export const PLATFORM = process.env.NEXT_PUBLIC_PLATFORM ?? "JE5wJpF7DTND9p3xKz7R7vfPLyszEY7CMVnVUPBXwuoF";
+/** Market-cap multiplier for presets (1 = production; small on devnet so graduation is reachable). */
+export const SCALE = Number(process.env.NEXT_PUBLIC_SCALE ?? 0.01);
+export const BURNER = process.env.NEXT_PUBLIC_BURNER === "1";
+
+/** Shared on-chain configs for static presets on this network (written by scripts/seed.ts). */
+export const PRESET_CONFIGS = ((deployments as Record<string, Partial<Record<PresetId, string>>>)[NETWORK] ?? {}) as Partial<Record<PresetId, string>>;
+
+export const explorer = (addr: string, kind: "address" | "tx" = "address") =>
+  `https://explorer.solana.com/${kind}/${addr}?cluster=${NETWORK === "localnet" ? `custom&customUrl=${encodeURIComponent(RPC_URL)}` : NETWORK}`;
