@@ -42,7 +42,7 @@ export type Trade = {
 
 export type Ix = { programId: string; data: string; accounts: { pubkey: string; isSigner: boolean; isWritable: boolean }[] };
 
-export type BuyQuote = { quoteId: string; marketId: string; side: Side; amountUsdc: string; shares: string; avgPrice: string; feeUsdc: string; expiresAt: string };
+export type BuyQuote = { quoteId: string; marketId: string; side: Side; amountUsdc: string; shares: string; avgPrice?: string; feeUsdc: string; expiresAt: string };
 export type BuyBuild = { orderId: string; expectedShares: string; feeUsdc: string; instructions: Ix[]; recentBlockhash: string; lastValidBlockHeight: number };
 export type Position = { marketId: string; category: string | null; side: Side; shares: string; phase: Phase; claimable: boolean; claimed: boolean; outcome: Side | null };
 export type ClaimBuild = { outcome: string; winningShares: string; instructions: Ix[]; recentBlockhash: string; lastValidBlockHeight: number };

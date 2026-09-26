@@ -99,7 +99,8 @@ export default function Hedge({ market, symbol }: { market: PantaResult<Market>;
           <dt>Shares</dt>
           <dd className="num">{quote.shares}</dd>
           <dt>Avg price</dt>
-          <dd className="num">{Number(quote.avgPrice).toFixed(4)}</dd>
+          {/* the pk_test_ sandbox omits avgPrice; derive it */}
+          <dd className="num">{Number(quote.avgPrice ?? Number(quote.amountUsdc) / Number(quote.shares)).toFixed(4)}</dd>
           <dt>Fee</dt>
           <dd className="num">{quote.feeUsdc} USDC</dd>
           <dt>Pays if {side.toUpperCase()}</dt>
@@ -108,7 +109,7 @@ export default function Hedge({ market, symbol }: { market: PantaResult<Market>;
       )}
       {quote ? (
         <button className={`btn btn-block ${side === "yes" ? "btn-yes" : "btn-no"}`} disabled={busy} onClick={confirm}>
-          {busy ? "Confirming…" : `Buy ${side.toUpperCase()} for ${Number(amount).toFixed(2)} USDC`}
+          {busy ? "Confirming…" : `Buy ${side.toUpperCase()} for ${quote.amountUsdc} USDC`}
         </button>
       ) : (
         <button className="btn btn-block" disabled={busy || !(Number(amount) >= 1)} onClick={getQuote}>

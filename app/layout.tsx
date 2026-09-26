@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
 import Providers from "./providers";
 import WalletButton from "@/components/WalletButton";
+import Faucet from "@/components/Faucet";
 import { NETWORK } from "@/lib/config";
 import { pantaLabel } from "@/lib/panta";
 import "./globals.css";
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/presets">Presets</Link>
               </nav>
               <span className="badge">{NETWORK}</span>
+              <Faucet />
               <WalletButton />
             </div>
           </header>

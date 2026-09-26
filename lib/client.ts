@@ -79,10 +79,14 @@ export function useSendSteps() {
 export function friendly(e: unknown): string {
   const m = (e as Error)?.message ?? String(e);
   if (/User rejected|rejected the request/i.test(m)) return "Cancelled in wallet";
-  if (/insufficient lamports|0x1\b|insufficient funds/i.test(m)) return "Not enough SOL";
+  if (/insufficient lamports|0x1\b|insufficient funds|no record of a prior credit/i.test(m)) return "Not enough SOL";
   if (/0x1772|ExceededSlippage/i.test(m)) return "Price moved; try again";
   return m.length > 140 ? `${m.slice(0, 140)}…` : m;
 }
 
 export const fmtSol = (lamports: number, digits = 3) => (lamports / 1e9).toLocaleString(undefined, { maximumFractionDigits: digits });
-export const pct = (x: number) => `${(x * 100).toFixed(x < 0.1 && x > 0 ? 1 : 0)}%`;
+// Floors so a 99.7%-full curve never reads "100%" before it has actually completed.
+export const pct = (x: number) => {
+  const d = x < 0.1 && x > 0 ? 1 : 0;
+  return `${(Math.floor(x * 100 * 10 ** d) / 10 ** d).toFixed(d)}%`;
+};

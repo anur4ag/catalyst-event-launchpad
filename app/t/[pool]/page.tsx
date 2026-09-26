@@ -192,8 +192,8 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
             <div className="card stack">
               <div className="section-title" style={{ margin: 0 }}>Graduate</div>
               <p className="small muted">
-                The curve is full. Anyone can move it into a Meteora DAMM v2 pool at the price the curve discovered. This locks the creator&apos;s vesting and
-                mints the LP positions.
+                The curve is full. Anyone can move it into a Meteora DAMM v2 pool at the price the curve discovered
+                {hasVesting ? ", which also locks the creator's vesting" : ""}. The LP positions are minted with their locks.
               </p>
               <button className="btn btn-primary btn-block" disabled={busy || !wallet.publicKey} onClick={async () => send((await graduateSteps(connection, wallet.publicKey!, new PublicKey(pool))).steps).catch(() => {})}>
                 {wallet.publicKey ? "Graduate to DAMM v2" : "Connect wallet to graduate"}
@@ -232,7 +232,7 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
     if (!(n > 0) || props.dammPool) return null;
     const { quote } = await curveQuote(connection, new PublicKey(props.pool), side, n);
     return quote;
-  }, [side, amount, props.dammPool]);
+  }, [side, amount, props.dammPool, props.busy]);
 
   async function trade() {
     if (!owner) return setVisible(true);
@@ -241,7 +241,7 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
       const step = props.dammPool
         ? await dammTradeStep(connection, owner, new PublicKey(props.dammPool), side, n)
         : await curveTradeStep(connection, owner, new PublicKey(props.pool), side, n);
-      await props.onTrade([step]);
+      await props.onTrade([step]).catch(() => undefined); // send errors show in the step log
     } catch (e) {
       setError(friendly(e));
     }
