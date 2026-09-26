@@ -105,7 +105,7 @@ Without Panta keys the app uses the built-in demo data. To use real data, put `P
 ### Tests
 
 ```bash
-bun test lib                                          # presets, curve math, Panta client + gate, launch metadata
+bun run test                                          # presets, curve math, Panta client + proxy gate, launch metadata
 RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts      # full on-chain lifecycle against the real programs
 ```
 
