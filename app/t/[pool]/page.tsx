@@ -98,7 +98,7 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
         </div>
         <div style={{ textAlign: "right" }}>
           <div className="num" style={{ fontSize: 24, fontWeight: 700 }}>{(livePrice * 1e9).toLocaleString(undefined, { maximumFractionDigits: 2 })} SOL</div>
-          <div className="muted small">market cap · {livePrice.toExponential(3)} SOL / token</div>
+          <div className="muted small">market cap · {(livePrice * 1e6).toLocaleString(undefined, { maximumSignificantDigits: 3 })} SOL per million tokens</div>
         </div>
       </div>
 
@@ -174,7 +174,7 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
                 <>
                   <dt>Creator allocation</dt>
                   <dd>
-                    {l.migrated ? "vesting" : "locked"}: unlock starts {cliff >= DAY ? `${Math.round(cliff / DAY)} days` : "right"} after graduation.
+                    Unlock starts {cliff >= DAY ? `${Math.round(cliff / DAY)} days` : "right"} after graduation.
                     {lockNote && ` ${lockNote}`} The creator&apos;s own buys aren&apos;t part of it.
                   </dd>
                 </>
