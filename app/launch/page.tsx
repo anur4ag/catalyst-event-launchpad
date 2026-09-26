@@ -5,10 +5,10 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { clients, launchSteps } from "@/lib/actions";
-import { PLATFORM, SCALE, NETWORK, launchConfigFor, type CustomConfig } from "@/lib/config";
+import { PLATFORM, SCALE, NETWORK, explorer, launchConfigFor, type CustomConfig } from "@/lib/config";
 import { fmtSol, pantaGet, useLoad, useSendSteps } from "@/lib/client";
 import { curvePoints, price } from "@/lib/curve";
-import { metaUri, suggestName, suggestSymbol } from "@/lib/launches";
+import { metaUri, short, suggestName, suggestSymbol } from "@/lib/launches";
 import { isOpen, toUnix, type Market } from "@/lib/panta";
 import { cliffUntilResolution, PRESETS, type PresetId } from "@/lib/presets";
 import { CurveChart, DataSourceNote, Odds, StepLog } from "@/components/ui";
@@ -190,6 +190,16 @@ export default function LaunchPage() {
               <dl className="kv">
                 <dt>Curve</dt>
                 <dd>{p.name}</dd>
+                <dt>Config</dt>
+                <dd className="num">
+                  {presetConfig ? (
+                    <a href={explorer(presetConfig)} target="_blank" rel="noreferrer">
+                      {short(presetConfig)} ↗
+                    </a>
+                  ) : (
+                    "new, created at launch"
+                  )}
+                </dd>
                 <dt>Start market cap</dt>
                 <dd className="num">{(price(cfg.sqrtStartPrice) * 1e9).toFixed(2)} SOL</dd>
                 <dt>Graduates at</dt>
