@@ -1,0 +1,8 @@
+# Never upload secrets or local chain state
+.keys/
+.env*
+.localnet/
+scripts/
+node_modules/
+.next/
+*.log
