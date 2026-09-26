@@ -1,146 +1,100 @@
-// Full launch lifecycle against a real DBC + DAMM v2 deployment (local validator with cloned
-// mainnet programs, or devnet): Event-Horizon config + pool + creator first buy -> trader buys to
-// graduation -> locker -> migrate to DAMM v2 -> swap on DAMM v2 -> partner claims fees.
+// Full lifecycle against real DBC + DAMM v2 programs (local validator from scripts/localnet.sh,
+// or devnet), using the same lib/actions.ts the web app uses:
+//   static preset: publish shared config -> launch on it
+//   event-horizon: per-launch config + first buy -> buy to graduation -> locker -> DAMM v2
+//   -> trade on DAMM v2 -> partner + creator fee claims
 //   RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts
-import BN from "bn.js";
-import { NATIVE_MINT } from "@solana/spl-token";
-import { Connection, Keypair, LAMPORTS_PER_SOL, sendAndConfirmTransaction, type Transaction } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, sendAndConfirmTransaction } from "@solana/web3.js";
 import {
-  DAMM_V2_MIGRATION_FEE_ADDRESS,
-  deriveDammV2PoolAddress,
-  deriveDbcPoolAddress,
-  DynamicBondingCurveClient,
-  SwapMode,
-} from "@meteora-ag/dynamic-bonding-curve-sdk";
-import { CpAmm, getCurrentPoint, getTokenProgram, SwapMode as DammSwapMode } from "@meteora-ag/cp-amm-sdk";
-import { PRESETS } from "../lib/presets";
+  claimCreatorFeesStep,
+  claimPartnerFeesStep,
+  clients,
+  curveTradeStep,
+  dammTradeStep,
+  graduateSteps,
+  launchSteps,
+  publishPresetStep,
+  type Step,
+} from "../lib/actions";
+import { getLaunch, listLaunches } from "../lib/launches";
 import { key } from "./keys";
 
 const RPC = process.env.RPC_URL ?? "http://127.0.0.1:8899";
 const conn = new Connection(RPC, "confirmed");
-const dbc = DynamicBondingCurveClient.create(conn, "confirmed");
-const damm = new CpAmm(conn);
-
-const partner = key("partner"); // preset author = feeClaimer
+const platform = key("partner");
 const creator = key("creator");
 const trader = key("trader");
+const SCALE = Number(process.env.SCALE ?? 0.01);
 
-const send = (label: string, tx: Transaction, ...signers: Keypair[]) =>
-  sendAndConfirmTransaction(conn, tx, signers, { commitment: "confirmed" }).then((sig) => {
-    console.log(`  ✓ ${label} ${sig.slice(0, 16)}…`);
-    return sig;
-  });
-
-async function fund(kp: Keypair, sol: number) {
-  if ((await conn.getBalance(kp.publicKey)) >= sol * LAMPORTS_PER_SOL) return;
-  await conn.confirmTransaction(await conn.requestAirdrop(kp.publicKey, sol * LAMPORTS_PER_SOL), "confirmed");
+export async function run(step: Step, payer: Keypair) {
+  step.tx.feePayer = payer.publicKey;
+  const sig = await sendAndConfirmTransaction(conn, step.tx, [payer, ...step.signers], { commitment: "confirmed" });
+  console.log(`  ✓ ${step.label} ${sig.slice(0, 12)}…`);
+  return sig;
 }
 
-console.log("RPC", RPC);
-await Promise.all([fund(partner, 5), fund(creator, 5), fund(trader, 50)]);
-
-// 1. Event-Horizon config + pool + creator first buy (per-launch config, event resolves in 7 days)
-const resolutionTime = Math.floor(Date.now() / 1000) + 7 * 86_400;
-const params = PRESETS["event-horizon"].build({ scale: 0.01, resolutionTime });
-const config = Keypair.generate();
-const baseMint = Keypair.generate();
-const { createConfigTx, createPoolWithFirstBuyTx } = await dbc.partner.createConfigAndPoolWithFirstBuy({
-  ...params,
-  config: config.publicKey,
-  feeClaimer: partner.publicKey,
-  leftoverReceiver: partner.publicKey,
-  quoteMint: NATIVE_MINT,
-  payer: creator.publicKey,
-  preCreatePoolParam: {
-    name: "BTC 150K",
-    symbol: "BTC150K",
-    uri: "https://example.com/btc150k.json",
-    poolCreator: creator.publicKey,
-    baseMint: baseMint.publicKey,
-  },
-  firstBuyParam: {
-    buyer: creator.publicKey,
-    buyAmount: new BN(0.05 * LAMPORTS_PER_SOL),
-    minimumAmountOut: new BN(1),
-    referralTokenAccount: null,
-  },
-});
-console.log("1. launch");
-await send("create config", createConfigTx, creator, config);
-await send("create pool + first buy", createPoolWithFirstBuyTx, creator, baseMint);
-const pool = deriveDbcPoolAddress(NATIVE_MINT, baseMint.publicKey, config.publicKey);
-console.log("  pool", pool.toBase58(), "threshold", Number(params.migrationQuoteThreshold) / LAMPORTS_PER_SOL, "SOL");
-
-// 2. Trader buys until the curve completes (partial fill caps the last buy at the threshold)
-console.log("2. buy to graduation");
-for (let i = 0; i < 20; i++) {
-  const progress = await dbc.state.getPoolQuoteTokenCurveProgress(pool);
-  console.log(`  progress ${(progress * 100).toFixed(1)}%`);
-  if (progress >= 1) break;
-  const tx = await dbc.pool.swap2({
-    owner: trader.publicKey,
-    pool,
-    swapBaseForQuote: false,
-    swapMode: SwapMode.PartialFill,
-    amountIn: new BN(1 * LAMPORTS_PER_SOL),
-    minimumAmountOut: new BN(1),
-    referralTokenAccount: null,
-  });
-  await send(`buy #${i + 1}`, tx, trader);
+async function fund(kp: Keypair, amount: number) {
+  if ((await conn.getBalance(kp.publicKey)) >= amount * LAMPORTS_PER_SOL) return;
+  await conn.confirmTransaction(await conn.requestAirdrop(kp.publicKey, amount * LAMPORTS_PER_SOL), "confirmed");
 }
 
-// 3. Locker (creator vesting) then migration into DAMM v2
-console.log("3. graduate to DAMM v2");
-await send("create locker", await dbc.migration.createLocker({ payer: trader.publicKey, pool }), trader);
-const dammConfig = DAMM_V2_MIGRATION_FEE_ADDRESS[6]; // Customizable
-const mig = await dbc.migration.migrateToDammV2({ payer: trader.publicKey, pool, dammConfig });
-await send("migrate", mig.transaction, trader, mig.firstPositionNftKeypair, mig.secondPositionNftKeypair);
-const dammPool = deriveDammV2PoolAddress(dammConfig, baseMint.publicKey, NATIVE_MINT);
-console.log("  DAMM v2 pool", dammPool.toBase58());
+const assert = (ok: unknown, msg: string) => {
+  if (!ok) throw new Error(`assertion failed: ${msg}`);
+};
 
-// 4. Swap on the graduated pool
-console.log("4. trade on DAMM v2");
-const ps = await damm.fetchPoolState(dammPool);
-const quote = damm.getQuote2({
-  inputTokenMint: NATIVE_MINT,
-  slippage: 5,
-  currentPoint: await getCurrentPoint(conn, ps.activationType),
-  poolState: ps,
-  tokenADecimal: 6,
-  tokenBDecimal: 9,
-  hasReferral: false,
-  swapMode: DammSwapMode.ExactIn,
-  amountIn: new BN(0.1 * LAMPORTS_PER_SOL),
-});
-const swapTx = await damm.swap2({
-  payer: trader.publicKey,
-  pool: dammPool,
-  inputTokenMint: NATIVE_MINT,
-  outputTokenMint: ps.tokenAMint,
-  tokenAMint: ps.tokenAMint,
-  tokenBMint: ps.tokenBMint,
-  tokenAVault: ps.tokenAVault,
-  tokenBVault: ps.tokenBVault,
-  tokenAProgram: getTokenProgram(ps.tokenAFlag),
-  tokenBProgram: getTokenProgram(ps.tokenBFlag),
-  referralTokenAccount: null,
-  swapMode: DammSwapMode.ExactIn,
-  amountIn: new BN(0.1 * LAMPORTS_PER_SOL),
-  minimumAmountOut: quote.minimumAmountOut ?? new BN(1),
-});
-await send("DAMM v2 buy", swapTx, trader);
+if (import.meta.main) {
+  console.log("RPC", RPC, "scale", SCALE);
+  await Promise.all([fund(platform, 5), fund(creator, 5), fund(trader, 50)]);
+  const uri = (m: string) => `https://catalyst.example/api/meta/${m}?n=x&s=x`;
 
-// 5. Preset author collects DBC partner trading fees
-console.log("5. partner fees");
-const fees = await dbc.state.getPoolFeeBreakdown(pool);
-console.log("  partner unclaimed", fees.partner.unclaimedQuoteFee.toNumber() / LAMPORTS_PER_SOL, "SOL");
-const claim = await dbc.partner.claimPartnerTradingFeeToReceiver({
-  feeClaimer: partner.publicKey,
-  payer: partner.publicKey,
-  pool,
-  maxBaseAmount: new BN("18446744073709551615"),
-  maxQuoteAmount: new BN("18446744073709551615"),
-  receiver: partner.publicKey,
-});
-await send("claim partner fees", claim, partner);
-console.log("done");
+  console.log("1. static preset: publish + launch");
+  const pub = await publishPresetStep(conn, "flat", platform.publicKey, platform.publicKey, { scale: SCALE });
+  await run(pub.step, platform);
+  const flat = await launchSteps(conn, {
+    preset: "flat", presetConfig: pub.config, creator: creator.publicKey, platform: platform.publicKey,
+    name: "Fair Coin", symbol: "FAIR", uri: uri("-"), firstBuySol: 0.01,
+  });
+  for (const s of flat.steps) await run(s, creator);
+
+  console.log("2. event-horizon launch");
+  const market = "MockBTC15ckDec31aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const eh = await launchSteps(conn, {
+    preset: "event-horizon", creator: creator.publicKey, platform: platform.publicKey, scale: SCALE,
+    resolutionTime: Math.floor(Date.now() / 1000) + 7 * 86_400,
+    name: "BTC 150K", symbol: "BTC150K", uri: uri(market), firstBuySol: 0.05,
+  });
+  for (const s of eh.steps) await run(s, creator);
+  const launch = await getLaunch(conn, eh.pool.toBase58());
+  assert(launch?.marketId === market, "Panta market id round-trips through Metaplex metadata");
+  const all = await listLaunches(conn, [platform.publicKey.toBase58()]);
+  assert(all.some((l) => l.pool === eh.pool.toBase58()) && all.some((l) => l.pool === flat.pool.toBase58()), "both launches discoverable");
+  console.log(`  pool ${eh.pool.toBase58()} threshold ${launch!.threshold / 1e9} SOL`);
+
+  console.log("3. trade to graduation");
+  await run(await curveTradeStep(conn, trader.publicKey, eh.pool, "sell", 1000), trader).catch(() => console.log("  (sell without tokens rejected, as expected)"));
+  for (let i = 0; i < 30; i++) {
+    const l = (await getLaunch(conn, eh.pool.toBase58()))!;
+    console.log(`  progress ${(l.progress * 100).toFixed(1)}%`);
+    if (l.progress >= 1) break;
+    await run(await curveTradeStep(conn, trader.publicKey, eh.pool, "buy", 0.5), trader);
+  }
+
+  console.log("4. graduate (permissionless keeper)");
+  const grad = await graduateSteps(conn, trader.publicKey, eh.pool);
+  for (const s of grad.steps) await run(s, trader);
+  assert((await getLaunch(conn, eh.pool.toBase58()))?.migrated, "pool marked migrated");
+
+  console.log("5. trade on DAMM v2");
+  await run(await dammTradeStep(conn, trader.publicKey, grad.dammPool, "buy", 0.1), trader);
+  await run(await dammTradeStep(conn, trader.publicKey, grad.dammPool, "sell", 1000), trader);
+  const ps = await clients(conn).damm.fetchPoolState(grad.dammPool);
+  console.log(`  DAMM v2 pool ${grad.dammPool.toBase58()} liquidity ${ps.liquidity.toString().slice(0, 12)}…`);
+
+  console.log("6. fee claims");
+  const { dbc } = clients(conn);
+  const fees = await dbc.state.getPoolFeeBreakdown(eh.pool);
+  console.log(`  partner ${fees.partner.unclaimedQuoteFee.toNumber() / 1e9} SOL, creator ${fees.creator.unclaimedQuoteFee.toNumber() / 1e9} SOL`);
+  await run(await claimPartnerFeesStep(conn, platform.publicKey, eh.pool), platform);
+  await run(await claimCreatorFeesStep(conn, creator.publicKey, eh.pool), creator);
+  console.log("done ✓");
+}

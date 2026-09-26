@@ -34,3 +34,9 @@ test("mock mode runs the full hedge flow: list -> detail -> quote -> build -> su
   const pos = await panta<{ positions: { side: string; shares: string }[] }>("GET", "positions/", undefined, new URLSearchParams({ wallet }));
   expect(pos.positions).toEqual([expect.objectContaining({ side: "no", shares: q.shares })]);
 });
+
+test("toUnix accepts documented unix seconds and sandbox ISO strings", async () => {
+  const { toUnix } = await import("./panta");
+  expect(toUnix(1798765199)).toBe(1798765199);
+  expect(toUnix("2027-01-01T00:00:00Z")).toBe(1798761600);
+});

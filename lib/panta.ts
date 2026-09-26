@@ -16,9 +16,10 @@ export type Market = {
   images: string[];
   phase: Phase;
   marketType: "standard" | "breaking";
-  startTime: number;
-  endTime: number;
-  resolutionTime: number;
+  // Docs say unix seconds; the pk_test_ sandbox returns ISO strings. Read through toUnix().
+  startTime: number | string;
+  endTime: number | string;
+  resolutionTime: number | string;
   region: string;
   resolved: boolean;
   status: string;
@@ -45,6 +46,11 @@ export type BuyQuote = { quoteId: string; marketId: string; side: Side; amountUs
 export type BuyBuild = { orderId: string; expectedShares: string; feeUsdc: string; instructions: Ix[]; recentBlockhash: string; lastValidBlockHeight: number };
 export type Position = { marketId: string; category: string | null; side: Side; shares: string; phase: Phase; claimable: boolean; claimed: boolean; outcome: Side | null };
 export type ClaimBuild = { outcome: string; winningShares: string; instructions: Ix[]; recentBlockhash: string; lastValidBlockHeight: number };
+
+/** Present on every pk_test_ sandbox response; the UI shows it verbatim. */
+export type Disclaimer = { disclaimer?: string };
+
+export const toUnix = (v: number | string) => (typeof v === "number" ? v : Math.floor(Date.parse(v) / 1000));
 
 export class PantaError extends Error {
   constructor(public code: string, message: string, public status = 400) {
