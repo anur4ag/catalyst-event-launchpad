@@ -23,8 +23,9 @@ export default function Home() {
           Launch tokens on <em>what happens next.</em>
         </h1>
         <p>
-          Every event token on Catalyst is tied to a live prediction market. Traders see the crowd&apos;s odds next to the price, and the creator&apos;s
-          allocation and LP stay locked past the event&apos;s scheduled resolution date. Curves and graduation run on Meteora DBC and DAMM v2.
+          Launches on Catalyst can be tied to a live prediction market. Traders see the crowd&apos;s odds next to the price, and the Event Horizon curve
+          locks the creator&apos;s allocation and LP for a capped duration derived from the event&apos;s scheduled date. Curves and graduation run on
+          Meteora DBC and DAMM v2.
         </p>
         <div className="row" style={{ marginTop: 28, flexWrap: "wrap" }}>
           <Link className="btn btn-primary" href="/launch">

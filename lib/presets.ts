@@ -72,7 +72,7 @@ const NO_VESTING = {
 export const geometricWeights = (ratio: number) => Array.from({ length: 16 }, (_, i) => ratio ** i);
 
 /** Seconds from now until the event's scheduled resolution, clamped so cliff + vesting fits DBC's 2-year lock cap.
- * DBC counts the cliff from graduation, which comes after launch, so unlocking starts on or after that date. */
+ * DBC counts the cliff from graduation, which comes after launch; when uncapped, unlocking can't start before that date. */
 export function cliffUntilResolution(resolutionTime: number, now: number, vestAfterCliff = VEST_AFTER_CLIFF) {
   return Math.max(0, Math.min(resolutionTime - now, MAX_LOCK_DURATION_IN_SECONDS - vestAfterCliff));
 }
@@ -104,13 +104,13 @@ export const PRESETS: Record<PresetId, Preset> = {
       id: "event-horizon",
       facts: [
         "Anti-sniper fee 50% → 1% over 15 min (exponential), plus a volatility fee",
-        "Creator's 10% allocation stays locked past the event's scheduled resolution date, then vests over 30 days",
+        "Creator's 10% allocation is locked for the time left until the event's scheduled date (counted from graduation, capped at 2 years), then vests over 30 days",
         "90% of LP vests to the creator on the same schedule; 10% is locked forever",
         "Lock lengths are set at launch and counted from graduation; they don't depend on the outcome",
         "Graduated pool fee falls 2% → 0.25% as market cap grows 10×",
       ],
       name: "Event Horizon",
-      tagline: "The creator's allocation and LP stay locked past the linked event's resolution date.",
+      tagline: "Locks the creator's allocation and LP for a capped duration derived from the linked event's scheduled date.",
       eventLinked: true,
       initialMcap: 30,
       migrationMcap: 300,

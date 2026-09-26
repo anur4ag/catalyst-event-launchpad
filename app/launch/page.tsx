@@ -61,10 +61,12 @@ export default function LaunchPage() {
     }
   }, [p, resolutionTime]);
   const published = useLoad(
-    async () => (presetConfig ? clients(connection).dbc.state.getPoolConfig(presetConfig) : null),
+    async () => (presetConfig ? { address: presetConfig, config: await clients(connection).dbc.state.getPoolConfig(presetConfig) } : null),
     [connection, presetConfig],
   );
-  const cfg = p.eventLinked ? built : published.data;
+  // useLoad keeps the previous result while reloading; only trust a result fetched for the address we'd launch on.
+  const loaded = published.data;
+  const cfg = p.eventLinked ? built : loaded && loaded.address === presetConfig ? loaded.config : null;
   const points = useMemo(() => (cfg ? curvePoints(cfg) : []), [cfg]);
   const cliff = resolutionTime ? cliffUntilResolution(resolutionTime, Math.floor(Date.now() / 1000)) : null;
   const capped = !!(resolutionTime && cliff !== null && cliff < resolutionTime - Date.now() / 1000 - 60);
