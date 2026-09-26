@@ -3,7 +3,9 @@
 import deployments from "./deployments.json";
 import type { PresetId } from "./presets";
 
-export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+const rpc = process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+/** A path such as /api/rpc (our key-hiding proxy, app/api/rpc) resolves against the page origin. */
+export const RPC_URL = rpc.startsWith("/") ? `${typeof window === "undefined" ? "http://localhost:3000" : window.location.origin}${rpc}` : rpc;
 export const NETWORK = process.env.NEXT_PUBLIC_NETWORK ?? "devnet";
 /** Platform wallet: leftoverReceiver on every Catalyst config, which makes launches discoverable. */
 export const PLATFORM = process.env.NEXT_PUBLIC_PLATFORM ?? "JE5wJpF7DTND9p3xKz7R7vfPLyszEY7CMVnVUPBXwuoF";

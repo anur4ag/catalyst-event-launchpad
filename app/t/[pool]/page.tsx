@@ -16,7 +16,12 @@ import {
   dammPositions,
   dammQuote,
   dammTradeStep,
+  dlmmFor,
+  dlmmQuote,
+  dlmmTradeStep,
+  addDlmmLiquidityStep,
   graduateSteps,
+  openDlmmStep,
   type LpPosition,
 } from "@/lib/actions";
 import { explorer } from "@/lib/config";
@@ -113,7 +118,7 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
             )}
           </section>
 
-          {dammPool && <LpCard dammPool={dammPool} creator={l.creator} author={cfg.feeClaimer.toBase58()} onClaim={send} busy={busy} />}
+          {dammPool && <LpCard dammPool={dammPool} mint={l.baseMint} symbol={l.symbol} creator={l.creator} author={cfg.feeClaimer.toBase58()} onClaim={send} busy={busy} />}
 
           {marketId && (
             <section className="card stack">
@@ -237,21 +242,37 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
   const quote = useLoad(async () => {
     if (!(n > 0)) return null;
     if (props.dammPool) {
-      const { quote, feeLamports } = await dammQuote(connection, new PublicKey(props.dammPool), side, n);
-      return { out: quote.outputAmount, fee: feeLamports, unfilled: 0, impact: quote.priceImpact.toNumber() };
+      // After graduation, quote DAMM v2 and the token's DLMM pair (if opened) and route to the better one.
+      const [damm, dlmm] = await Promise.all([dammQuote(connection, new PublicKey(props.dammPool), side, n), dlmmQuote(connection, new PublicKey(props.baseMint), side, n)]);
+      const viaDamm = { venue: "DAMM v2" as const, out: damm.quote.outputAmount, fee: `${fmtSol(damm.feeLamports, 4)} SOL`, unfilled: 0, impact: damm.quote.priceImpact.toNumber() };
+      if (!dlmm || dlmm.quote.outAmount.lte(damm.quote.outputAmount)) return { ...viaDamm, alt: dlmm && { venue: "DLMM", out: dlmm.quote.outAmount } };
+      const f = Number(dlmm.quote.fee.add(dlmm.quote.protocolFee).toString());
+      return {
+        venue: "DLMM" as const,
+        out: dlmm.quote.outAmount,
+        fee: side === "buy" ? `${fmtSol(f, 4)} SOL` : `${(f / 1e6).toLocaleString(undefined, { maximumFractionDigits: 0 })} ${props.symbol}`,
+        unfilled: 0,
+        impact: dlmm.quote.priceImpact.toNumber(),
+        alt: { venue: "DAMM v2", out: damm.quote.outputAmount },
+      };
     }
     const { quote } = await curveQuote(connection, new PublicKey(props.pool), side, n);
     // All Catalyst presets collect fees in the quote token (SOL), on the way in for buys and out for sells.
-    return { out: quote.outputAmount, fee: Number(quote.tradingFee.add(quote.protocolFee).toString()), unfilled: Number(quote.amountLeft.toString()), impact: null };
+    const fee = Number(quote.tradingFee.add(quote.protocolFee).toString());
+    return { venue: "DBC curve" as const, out: quote.outputAmount, fee: `${fmtSol(fee, 4)} SOL`, unfilled: Number(quote.amountLeft.toString()), impact: null, alt: null };
   }, [side, amount, props.dammPool, props.busy]);
 
   async function trade() {
     if (!owner) return setVisible(true);
     setError(null);
     try {
-      const step = props.dammPool
-        ? await dammTradeStep(connection, owner, new PublicKey(props.dammPool), side, n)
-        : await curveTradeStep(connection, owner, new PublicKey(props.pool), side, n);
+      const venue = quote.data?.venue;
+      const step =
+        venue === "DLMM"
+          ? await dlmmTradeStep(connection, owner, new PublicKey(props.baseMint), side, n)
+          : props.dammPool
+            ? await dammTradeStep(connection, owner, new PublicKey(props.dammPool), side, n)
+            : await curveTradeStep(connection, owner, new PublicKey(props.pool), side, n);
       await props.onTrade([step]).catch(() => undefined); // send errors show in the step log
     } catch (e) {
       setError(friendly(e));
@@ -265,7 +286,7 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
     <div className="card stack">
       <div className="row between">
         <div className="section-title" style={{ margin: 0 }}>Trade ${props.symbol}</div>
-        <span className="badge">{props.dammPool ? "DAMM v2" : "DBC curve"}</span>
+        <span className="badge">{q?.venue ?? (props.dammPool ? "DAMM v2" : "DBC curve")}</span>
       </div>
       <div className="tabs" role="group" aria-label="Side">
         <button aria-pressed={side === "buy"} onClick={() => setSide("buy")}>Buy</button>
@@ -291,11 +312,19 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
           <dt>You get about</dt>
           <dd className="num">{side === "buy" ? `${out.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${props.symbol}` : `${out.toFixed(4)} SOL`}</dd>
           <dt>Fee</dt>
-          <dd className="num">{fmtSol(q!.fee, 4)} SOL</dd>
+          <dd className="num">{q!.fee}</dd>
           {q!.impact !== null && (
             <>
               <dt>Price impact</dt>
               <dd className="num">{q!.impact.toFixed(2)}%</dd>
+            </>
+          )}
+          {q!.alt && (
+            <>
+              <dt>Routed via {q!.venue}</dt>
+              <dd className="num faint">
+                {q!.alt.venue} would give {(Number(q!.alt.out.toString()) / (side === "buy" ? 1e6 : 1e9)).toLocaleString(undefined, { maximumFractionDigits: side === "buy" ? 0 : 4 })}
+              </dd>
             </>
           )}
           {side === "buy" && q!.unfilled > 0 && (
@@ -314,13 +343,18 @@ function TradeCard(props: { pool: string; baseMint: string; dammPool: string | n
   );
 }
 
-function LpCard(props: { dammPool: PublicKey; creator: string; author: string; onClaim: ReturnType<typeof useSendSteps>["send"]; busy: boolean }) {
+function LpCard(props: { dammPool: PublicKey; mint: string; symbol: string; creator: string; author: string; onClaim: ReturnType<typeof useSendSteps>["send"]; busy: boolean }) {
   const { connection } = useConnection();
   const wallet = useWallet();
   const me = wallet.publicKey?.toBase58();
   const lp = useLoad(async () => {
-    const [positions, probe] = await Promise.all([dammPositions(connection, props.dammPool), dammQuote(connection, props.dammPool, "buy", 0.01)]);
-    return { positions, fee: probe.feeLamports / 1e7 }; // fee share of a 0.01 SOL buy
+    const [positions, probe, dlmm] = await Promise.all([
+      dammPositions(connection, props.dammPool),
+      dammQuote(connection, props.dammPool, "buy", 0.01),
+      dlmmFor(connection, new PublicKey(props.mint)),
+    ]);
+    const tokensPerSol = probe.quote.outputAmount.toNumber() / 1e6 / 0.01;
+    return { positions, fee: probe.feeLamports / 1e7, tokensPerSol, dlmm: dlmm && { pair: dlmm.pubkey.toBase58(), active: await dlmm.getActiveBin() } }; // fee share of a 0.01 SOL buy
   }, [props.dammPool.toBase58(), props.busy]);
   const now = Date.now() / 1000;
   const who = (o: string | null) => (o === props.creator ? "Creator" : o === props.author ? "Preset author" : o ? short(o) : "unknown");
@@ -361,6 +395,66 @@ function LpCard(props: { dammPool: PublicKey; creator: string; author: string; o
         {lp.loading && !lp.data && <span className="muted">Loading positions…</span>}
         {lp.error && <span className="muted">{lp.error}</span>}
       </div>
+      {lp.data && <DlmmRange mint={props.mint} symbol={props.symbol} dammPool={props.dammPool} tokensPerSol={lp.data.tokensPerSol} dlmm={lp.data.dlmm} onSend={props.onClaim} busy={props.busy} />}
     </section>
+  );
+}
+
+/** Concentrated liquidity on Meteora DLMM next to the graduated pool: open the pair, then add a ±10-bin range. */
+function DlmmRange(props: {
+  mint: string;
+  symbol: string;
+  dammPool: PublicKey;
+  tokensPerSol: number;
+  dlmm: { pair: string; active: { binId: number; pricePerToken: string } } | null;
+  onSend: ReturnType<typeof useSendSteps>["send"];
+  busy: boolean;
+}) {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+  const [solIn, setSolIn] = useState("0.05");
+  const tokens = Number(solIn) * props.tokensPerSol;
+  const go = (build: () => Promise<Awaited<ReturnType<typeof openDlmmStep>>>) => async () => {
+    if (wallet.publicKey) await props.onSend([await build()]).catch(() => {});
+  };
+
+  return (
+    <div className="stack" style={{ gap: 8, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
+      <div className="row between small">
+        <strong>Meteora DLMM range</strong>
+        {props.dlmm && (
+          <a className="faint num" href={explorer(props.dlmm.pair)} target="_blank" rel="noreferrer">
+            pair {short(props.dlmm.pair)} ↗
+          </a>
+        )}
+      </div>
+      {!props.dlmm ? (
+        <>
+          <p className="small muted">Add concentrated liquidity beside this pool. The pair opens at the current pool price with 1% bins; trades route to whichever pool pays more.</p>
+          <button className="btn btn-sm" disabled={props.busy || !wallet.publicKey} onClick={go(() => openDlmmStep(connection, wallet.publicKey!, props.dammPool))}>
+            {wallet.publicKey ? "Open DLMM pair" : "Connect wallet"}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="small muted num">
+            Active bin {props.dlmm.active.binId} · 1% bins · deposit spreads evenly over ±10 bins
+          </p>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <input className="input num" style={{ width: 110 }} type="number" min="0" step="any" value={solIn} onChange={(e) => setSolIn(e.target.value)} aria-label="SOL to deposit" />
+            <span className="small muted num">
+              SOL + {tokens.toLocaleString(undefined, { maximumFractionDigits: 0 })} {props.symbol}
+            </span>
+            <button
+              className="btn btn-sm"
+              disabled={props.busy || !wallet.publicKey || !(Number(solIn) > 0)}
+              onClick={go(() => addDlmmLiquidityStep(connection, wallet.publicKey!, new PublicKey(props.mint), tokens, Number(solIn)))}
+            >
+              Add liquidity
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

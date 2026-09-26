@@ -12,7 +12,16 @@ import {
   getCurrentPoint as dbcCurrentPoint,
   SwapMode,
 } from "@meteora-ag/dynamic-bonding-curve-sdk";
-import { CpAmm, derivePositionNftAccount, getCurrentPoint, getTokenProgram, getUnClaimLpFee, SwapMode as DammSwapMode } from "@meteora-ag/cp-amm-sdk";
+import {
+  CpAmm,
+  derivePositionNftAccount,
+  getCurrentPoint,
+  getPriceFromSqrtPrice,
+  getTokenProgram,
+  getUnClaimLpFee,
+  SwapMode as DammSwapMode,
+} from "@meteora-ag/cp-amm-sdk";
+import DLMM, { ActivationType as DlmmActivation, deriveCustomizablePermissionlessLbPair, LBCLMM_PROGRAM_IDS, StrategyType } from "@meteora-ag/dlmm";
 import { PRESETS, type PresetId } from "./presets";
 
 export type Step = { label: string; tx: Transaction; signers: Keypair[] };
@@ -286,4 +295,78 @@ export async function publishPresetStep(conn: Connection, preset: PresetId, auth
     payer: author,
   });
   return { step: { label: `Publish ${PRESETS[preset].name}`, tx, signers: [config] } as Step, config: config.publicKey };
+}
+
+// ---- DLMM: a concentrated-liquidity pair next to the graduated DAMM v2 pool ----
+// Anyone holding the token can open a token/SOL DLMM pair at the DAMM v2 price and add a range;
+// trades then route to whichever pool quotes more.
+const DLMM_PROGRAM = new PublicKey(LBCLMM_PROGRAM_IDS["mainnet-beta"]); // same id on devnet; cloned on localnet
+const DLMM_OPT = { programId: DLMM_PROGRAM };
+const DLMM_BIN_STEP = 100; // 1% per bin: coarse enough for a young token, few bin arrays to rent
+const DLMM_FEE_BPS = 100;
+
+export const dlmmPairFor = (mint: PublicKey) => deriveCustomizablePermissionlessLbPair(mint, NATIVE_MINT, DLMM_PROGRAM)[0];
+
+/** The token/SOL DLMM pair for this mint, if one has been opened. */
+export async function dlmmFor(conn: Connection, mint: PublicKey) {
+  const pair = dlmmPairFor(mint);
+  return (await conn.getAccountInfo(pair)) ? DLMM.create(conn, pair, DLMM_OPT) : null;
+}
+
+/** Create the pair with its active bin at the DAMM v2 pool's current price. */
+export async function openDlmmStep(conn: Connection, owner: PublicKey, dammPool: PublicKey): Promise<Step> {
+  const ps = await clients(conn).damm.fetchPoolState(dammPool);
+  const price = getPriceFromSqrtPrice(ps.sqrtPrice, 6, 9).toNumber();
+  const activeId = DLMM.getBinIdFromPrice(DLMM.getPricePerLamport(6, 9, price), DLMM_BIN_STEP, true);
+  const tx = await DLMM.createCustomizablePermissionlessLbPair2(
+    conn, new BN(DLMM_BIN_STEP), ps.tokenAMint, NATIVE_MINT, new BN(activeId), new BN(DLMM_FEE_BPS), DlmmActivation.Timestamp, false, owner,
+    undefined, false, undefined, undefined, DLMM_OPT,
+  );
+  return { label: "Open DLMM pair", tx, signers: [] };
+}
+
+/** Two-sided Spot range of `binsEachSide` bins around the active bin; amounts in whole tokens / SOL. */
+export async function addDlmmLiquidityStep(conn: Connection, owner: PublicKey, mint: PublicKey, tokens: number, solIn: number, binsEachSide = 10): Promise<Step> {
+  const dlmm = (await dlmmFor(conn, mint))!;
+  const active = await dlmm.getActiveBin();
+  const position = Keypair.generate();
+  const tx = await dlmm.initializePositionAndAddLiquidityByStrategy({
+    positionPubKey: position.publicKey,
+    user: owner,
+    totalXAmount: new BN(Math.round(tokens * 1e6)),
+    totalYAmount: sol(solIn),
+    strategy: { minBinId: active.binId - binsEachSide, maxBinId: active.binId + binsEachSide, strategyType: StrategyType.Spot },
+    slippage: 1,
+  });
+  return { label: "Add DLMM liquidity", tx, signers: [position] };
+}
+
+/** Quote on the DLMM pair; null when there is no pair or not enough liquidity in range. */
+export async function dlmmQuote(conn: Connection, mint: PublicKey, side: "buy" | "sell", amount: number, slippageBps = 100) {
+  const dlmm = await dlmmFor(conn, mint);
+  if (!dlmm) return null;
+  const swapForY = side === "sell"; // X = token, Y = SOL
+  const inAmount = side === "buy" ? sol(amount) : new BN(Math.round(amount * 1e6));
+  try {
+    const quote = dlmm.swapQuote(inAmount, swapForY, new BN(slippageBps), await dlmm.getBinArrayForSwap(swapForY));
+    return { dlmm, quote, inAmount, swapForY };
+  } catch {
+    return null; // e.g. the range doesn't cover this size
+  }
+}
+
+export async function dlmmTradeStep(conn: Connection, owner: PublicKey, mint: PublicKey, side: "buy" | "sell", amount: number): Promise<Step & { out: BN }> {
+  const q = await dlmmQuote(conn, mint, side, amount);
+  if (!q) throw new Error("DLMM can't fill this trade");
+  const [x, y] = [q.dlmm.lbPair.tokenXMint, q.dlmm.lbPair.tokenYMint];
+  const tx = await q.dlmm.swap({
+    inToken: q.swapForY ? x : y,
+    outToken: q.swapForY ? y : x,
+    inAmount: q.inAmount,
+    minOutAmount: q.quote.minOutAmount,
+    lbPair: q.dlmm.pubkey,
+    user: owner,
+    binArraysPubkey: q.quote.binArraysPubkey,
+  });
+  return { label: side === "buy" ? "Buy on DLMM" : "Sell on DLMM", tx, signers: [], out: q.quote.outAmount };
 }

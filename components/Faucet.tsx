@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { NETWORK } from "@/lib/config";
-import { friendly, useLoad } from "@/lib/client";
+import { confirmSig, friendly, useLoad } from "@/lib/client";
 
 export default function Faucet() {
   const { connection } = useConnection();
@@ -15,7 +15,8 @@ export default function Faucet() {
   async function drop() {
     setState("…");
     try {
-      await connection.confirmTransaction(await connection.requestAirdrop(publicKey!, 2e9), "confirmed");
+      const { lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      await confirmSig(connection, await connection.requestAirdrop(publicKey!, 1e9), lastValidBlockHeight);
       setState("done");
     } catch (e) {
       setState(friendly(e));
@@ -23,7 +24,7 @@ export default function Faucet() {
     }
   }
   return (
-    <button className="btn btn-sm" onClick={drop} disabled={state === "…"} title={`Request 2 test SOL from the ${NETWORK} faucet`}>
+    <button className="btn btn-sm" onClick={drop} disabled={state === "…"} title={`Request 1 test SOL from the ${NETWORK} faucet`}>
       {state === "…" ? "Requesting…" : "Get test SOL"}
     </button>
   );

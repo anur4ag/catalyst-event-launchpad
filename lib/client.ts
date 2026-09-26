@@ -1,6 +1,7 @@
 "use client";
 // Browser-side helpers: Panta proxy calls and wallet signing of lib/actions steps.
 import { useCallback, useEffect, useState } from "react";
+import type { Connection } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import type { Step } from "./actions";
 
@@ -58,7 +59,7 @@ export function useSendSteps() {
           s.tx.recentBlockhash = latest.blockhash;
           try {
             const sig = await wallet.sendTransaction(s.tx, connection, { signers: s.signers });
-            await connection.confirmTransaction({ signature: sig, ...latest }, "confirmed");
+            await confirmSig(connection, sig, latest.lastValidBlockHeight);
             sigs.push(sig);
             setLog((l) => l.map((x, j) => (j === i ? { ...x, status: "done", sig } : x)));
           } catch (e) {
@@ -76,11 +77,22 @@ export function useSendSteps() {
   return { send, log, busy, reset: () => setLog([]) };
 }
 
+/** Confirm by polling over HTTP; the /api/rpc proxy has no websocket for signature subscriptions. */
+export async function confirmSig(connection: Connection, signature: string, lastValidBlockHeight: number) {
+  for (;;) {
+    const status = (await connection.getSignatureStatuses([signature])).value[0];
+    if (status?.err) throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
+    if (status?.confirmationStatus === "confirmed" || status?.confirmationStatus === "finalized") return;
+    if ((await connection.getBlockHeight("confirmed")) > lastValidBlockHeight) throw new Error("Transaction expired; try again");
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
 export function friendly(e: unknown): string {
   const m = (e as Error)?.message ?? String(e);
   if (/User rejected|rejected the request/i.test(m)) return "Cancelled in wallet";
   if (/insufficient lamports|0x1\b|insufficient funds|no record of a prior credit/i.test(m)) return "Not enough SOL";
-  if (/0x1772|ExceededSlippage/i.test(m)) return "Price moved; try again";
+  if (/0x1772|ExceededSlippage|"Custom":6002\b/i.test(m)) return "Price moved; try again";
   if (/MARKET_NOT_IN_PRIMARY|INVALID_MARKET_PARAMS/.test(`${m} ${(e as { code?: string })?.code}`)) return "Panta isn't taking primary orders on this market";
   return m.length > 140 ? `${m.slice(0, 140)}…` : m;
 }

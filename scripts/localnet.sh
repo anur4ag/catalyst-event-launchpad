@@ -7,6 +7,7 @@ exec solana-test-validator --reset --quiet --ledger "${LEDGER:-.localnet}" -u "$
   --clone-upgradeable-program cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG `# DAMM v2` \
   --clone-upgradeable-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s `# Metaplex metadata` \
   --clone-upgradeable-program LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn `# Jupiter locker` \
+  --clone-upgradeable-program LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo `# DLMM` \
   --clone FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM `# DBC pool authority (pays locker rent)` \
   --clone HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC `# DAMM v2 pool authority` \
   --clone A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck `# DAMM v2 migration config: Customizable` \

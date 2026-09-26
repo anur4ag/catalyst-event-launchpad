@@ -3,19 +3,27 @@
 //   static preset: publish shared config -> launch on it
 //   event-horizon: per-launch config + first buy -> buy to graduation -> locker -> DAMM v2
 //   -> trade on DAMM v2 -> LP locks as configured -> DBC fee claims + DAMM v2 LP fee claims
+//   -> open a DLMM pair at the DAMM v2 price, add a range, trade on it
 //   RPC_URL=http://127.0.0.1:8899 bun scripts/e2e.ts
 import {
+  addDlmmLiquidityStep,
   claimCreatorFeesStep,
   claimLpFeesStep,
   claimPartnerFeesStep,
   clients,
   curveTradeStep,
   dammPositions,
+  dammQuote,
   dammTradeStep,
+  dlmmQuote,
+  dlmmTradeStep,
   graduateSteps,
   launchSteps,
+  openDlmmStep,
   publishPresetStep,
 } from "../lib/actions";
+import { PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { getLaunch, listLaunches } from "../lib/launches";
 import { key } from "./keys";
 import { conn, fund, RPC, run } from "./util";
@@ -96,5 +104,19 @@ if (import.meta.main) {
     await run(await claimLpFeesStep(conn, k.publicKey, grad.dammPool, p), k);
   }
   assert((await dammPositions(conn, grad.dammPool)).every((p) => p.feeLamports === 0), "LP fees claimed");
+
+  console.log("8. DLMM pair next to the DAMM v2 pool");
+  const mint = new PublicKey(launch!.baseMint);
+  await run(await openDlmmStep(conn, trader.publicKey, grad.dammPool), trader);
+  const tokens = (await conn.getTokenAccountBalance(getAssociatedTokenAddressSync(mint, trader.publicKey))).value.uiAmount!;
+  const px = (await dammQuote(conn, grad.dammPool, "buy", 0.01)).quote.outputAmount.toNumber() / 1e6 / 0.01; // tokens per SOL
+  await run(await addDlmmLiquidityStep(conn, trader.publicKey, mint, tokens / 2, tokens / 2 / px), trader);
+  const [viaDamm, viaDlmm] = await Promise.all([dammQuote(conn, grad.dammPool, "buy", 0.01), dlmmQuote(conn, mint, "buy", 0.01)]);
+  assert(viaDlmm, "DLMM quotes a buy");
+  const ratio = viaDlmm!.quote.outAmount.toNumber() / viaDamm.quote.outputAmount.toNumber();
+  console.log(`  0.01 SOL buys ${viaDlmm!.quote.outAmount.toNumber() / 1e6} on DLMM vs ${viaDamm.quote.outputAmount.toNumber() / 1e6} on DAMM v2`);
+  assert(ratio > 0.9 && ratio < 1.1, "DLMM opened at the DAMM v2 price");
+  await run(await dlmmTradeStep(conn, trader.publicKey, mint, "buy", 0.01), trader);
+  await run(await dlmmTradeStep(conn, trader.publicKey, mint, "sell", 1000), trader);
   console.log("done ✓");
 }
