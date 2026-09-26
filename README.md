@@ -172,6 +172,11 @@ scripts/            localnet, seed, e2e
 - **Scale.** Off mainnet, presets run at 0.5–1% of production market caps, so graduation is reachable with faucet SOL.
 - **Discovery.** It uses `getProgramAccounts` through the DBC SDK, so it needs an RPC that allows it. The public devnet RPC was timing out on account reads while we built this, so the deploy uses a Helius devnet endpoint behind `/api/rpc`.
 - **Rate limits.** The per-IP limits live in each server instance's memory, so the real ceiling grows with the number of instances, and many IPs together can still use up the provider quota.
+- **Batched RPC.** Helius's free plan refuses JSON-RPC batch requests. `/api/rpc` checks and forwards them, but they fail upstream. The app itself never batches.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ---
 
