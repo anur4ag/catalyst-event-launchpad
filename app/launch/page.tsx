@@ -102,7 +102,7 @@ export default function LaunchPage() {
     <div style={{ padding: "40px 0" }}>
       <h1 style={{ fontSize: 34, marginBottom: 8 }}>Launch an event token</h1>
       <p className="muted" style={{ marginBottom: 28 }}>
-        Pick a real-world event, pick a curve, name your token. Takes three wallet approvals or fewer.
+        Pick a real-world event, pick a curve, name your token. Takes one wallet approval, or two for Event Horizon.
       </p>
       <div className="split">
         <div className="stack" style={{ gap: 20 }}>

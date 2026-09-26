@@ -6,3 +6,5 @@ scripts/
 node_modules/
 .next/
 *.log
+pitch/
+submission/
