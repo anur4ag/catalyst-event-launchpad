@@ -5,7 +5,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { clients, launchSteps } from "@/lib/actions";
-import { PLATFORM, PRESET_CONFIGS, SCALE, NETWORK } from "@/lib/config";
+import { PLATFORM, SCALE, NETWORK, launchConfigFor, type CustomConfig } from "@/lib/config";
 import { fmtSol, pantaGet, useLoad, useSendSteps } from "@/lib/client";
 import { curvePoints, price } from "@/lib/curve";
 import { metaUri, suggestName, suggestSymbol } from "@/lib/launches";
@@ -29,7 +29,7 @@ export default function LaunchPage() {
   const { send, log, busy } = useSendSteps();
   // ?preset=flat&config=<addr> comes from the presets page ("Launch on it"). That config belongs to
   // that preset only; switching to another preset uses the other preset's own config.
-  const [custom, setCustom] = useState<{ preset: PresetId; config: string } | null>(null);
+  const [custom, setCustom] = useState<CustomConfig | null>(null);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const id = q.get("preset");
@@ -46,7 +46,7 @@ export default function LaunchPage() {
   const resolutionTime = m ? toUnix(m.resolutionTime) : undefined;
 
   const p = PRESETS[preset];
-  const configFor = (id: PresetId) => (custom?.preset === id ? custom.config : PRESET_CONFIGS[id]);
+  const configFor = (id: PresetId) => launchConfigFor(id, custom);
   const presetConfig = p.eventLinked ? undefined : configFor(preset);
   const available = (id: PresetId) => (PRESETS[id].eventLinked ? !!marketId : !!configFor(id));
 
@@ -202,9 +202,11 @@ export default function LaunchPage() {
                     <dd>
                       {cliff === null
                         ? "locked until the event's scheduled resolution date, then vests over 30 days"
-                        : `locked for ${Math.round(cliff / 86_400)} days after graduation, then vests over 30 days. ${
-                            capped ? "That's DBC's 2-year cap, so it can unlock before the event resolves." : `Graduation comes after launch, so unlocking starts no earlier than ${fmtDate(resolutionTime!)}.`
-                          }`}
+                        : `locked for ${Math.round(cliff / 86_400)} days counted from graduation, then vests over 30 days. ${
+                            capped
+                              ? "That's DBC's 2-year cap, so it can unlock before the event resolves."
+                              : `The clock starts at graduation, not now, so unlocking begins after ${fmtDate(resolutionTime!)} at the earliest, later if graduation takes a while.`
+                          } It's a fixed duration and doesn't depend on the outcome.`}
                     </dd>
                     <dt>Your LP</dt>
                     <dd>90% of the graduated pool, vesting on the same schedule; 10% is locked forever</dd>

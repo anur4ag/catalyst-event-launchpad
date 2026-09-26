@@ -16,5 +16,12 @@ export const BURNER = process.env.NEXT_PUBLIC_BURNER === "1";
 /** Shared on-chain configs for static presets on this network (written by scripts/seed.ts). */
 export const PRESET_CONFIGS = ((deployments as Record<string, Partial<Record<PresetId, string>>>)[NETWORK] ?? {}) as Partial<Record<PresetId, string>>;
 
+export type CustomConfig = { preset: PresetId; config: string };
+
+/** The published config a static preset launches on. A ?config= link applies only to the preset it came with.
+ * The launch page shows the summary for, and submits, exactly this address. */
+export const launchConfigFor = (preset: PresetId, custom: CustomConfig | null, deployed = PRESET_CONFIGS) =>
+  custom?.preset === preset ? custom.config : deployed[preset];
+
 export const explorer = (addr: string, kind: "address" | "tx" = "address") =>
   `https://explorer.solana.com/${kind}/${addr}?cluster=${NETWORK === "localnet" ? `custom&customUrl=${encodeURIComponent(RPC_URL)}` : NETWORK}`;
