@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { PublicKey } from "@solana/web3.js";
 import { curveTradeStep, dammTradeStep, graduateSteps, launchSteps, publishPresetStep } from "../lib/actions";
-import { getLaunch, metaUri, suggestName, suggestSymbol } from "../lib/launches";
+import { getLaunch, listLaunches, metaUri, suggestName, suggestSymbol } from "../lib/launches";
 import { isOpen, panta, toUnix, type Market } from "../lib/panta";
 import type { PresetId } from "../lib/presets";
 import { key } from "./keys";
@@ -35,8 +35,9 @@ for (const id of ["flat", "long", "parabolic"] as const) {
 deployments[NETWORK] = configs;
 writeFileSync(path, `${JSON.stringify(deployments, null, 2)}\n`);
 
-const { items } = await panta<{ items: Market[] }>("GET", "markets/");
-const markets = await Promise.all(items.filter(isOpen).slice(0, 4).map((m) => panta<Market>("GET", `markets/${m.marketId}/`)));
+// SEED_MARKETS=<id>,<id> pins the event markets (e.g. to resume a run); otherwise the first open ones.
+const ids = process.env.SEED_MARKETS?.split(",") ?? (await panta<{ items: Market[] }>("GET", "markets/")).items.filter(isOpen).slice(0, 4).map((m) => m.marketId);
+const markets = await Promise.all(ids.map((id) => panta<Market>("GET", `markets/${id}/`)));
 console.log(`2. launches (${markets.length} open Panta markets)`);
 
 const pick = (i: number) => markets[i % markets.length] ?? null;
@@ -51,8 +52,18 @@ const plan: { preset: PresetId; name: string; symbol: string; market: Market | n
   { preset: "long", name: "Long Haul", symbol: "HAUL", market: null, stage: 0.05 },
 ];
 
+// Re-runs pick up where an interrupted run stopped: an existing launch with the same symbol is reused.
+const existing = await listLaunches(conn, [platform.publicKey.toBase58()]);
 const pools: PublicKey[] = [];
+let launchedNow = false;
 for (const p of plan) {
+  const prior = existing.find((l) => l.symbol === p.symbol && l.creator === creator.publicKey.toBase58());
+  if (prior) {
+    console.log(` $${p.symbol} (reusing ${prior.pool})`);
+    pools.push(new PublicKey(prior.pool));
+    continue;
+  }
+  launchedNow = true;
   await fund(creator, 0.1, platform);
   const r = await launchSteps(conn, {
     preset: p.preset,
@@ -71,7 +82,7 @@ for (const p of plan) {
   pools.push(r.pool);
 }
 
-if (!LOCAL) {
+if (!LOCAL && launchedNow) {
   // Event Horizon starts at a 50% anti-sniper fee that decays over 15 min; don't pay it with scarce devnet SOL.
   console.log("3. waiting 16 min for launch fees to decay…");
   await Bun.sleep(16 * 60_000);
@@ -90,7 +101,7 @@ async function buyTo(pool: PublicKey, target: number) {
 
 for (const [i, p] of plan.entries()) {
   await buyTo(pools[i], p.stage === "graduated" ? 1 : p.stage);
-  if (p.stage === "graduated") {
+  if (p.stage === "graduated" && !(await getLaunch(conn, pools[i].toBase58()))!.migrated) {
     const [keeper, buyer] = [traders[0], traders[1 % traders.length]];
     await fund(keeper, 0.15, platform);
     const g = await graduateSteps(conn, keeper.publicKey, pools[i]);

@@ -71,7 +71,8 @@ const NO_VESTING = {
 /** 16 geometric weights: ratio > 1 deepens liquidity toward graduation, < 1 thins it (price accelerates). */
 export const geometricWeights = (ratio: number) => Array.from({ length: 16 }, (_, i) => ratio ** i);
 
-/** Seconds from now until the event resolves, clamped so cliff + vesting fits DBC's 2-year lock cap. */
+/** Seconds from now until the event's scheduled resolution, clamped so cliff + vesting fits DBC's 2-year lock cap.
+ * DBC counts the cliff from graduation, which comes after launch, so unlocking starts on or after that date. */
 export function cliffUntilResolution(resolutionTime: number, now: number, vestAfterCliff = VEST_AFTER_CLIFF) {
   return Math.max(0, Math.min(resolutionTime - now, MAX_LOCK_DURATION_IN_SECONDS - vestAfterCliff));
 }
@@ -103,12 +104,13 @@ export const PRESETS: Record<PresetId, Preset> = {
       id: "event-horizon",
       facts: [
         "Anti-sniper fee 50% → 1% over 15 min (exponential), plus a volatility fee",
-        "Creator's 10% allocation unlocks only after the event resolves, then vests over 30 days",
-        "90% of LP vests to the creator from the same date; 10% is locked forever",
+        "Creator's 10% allocation stays locked past the event's scheduled resolution date, then vests over 30 days",
+        "90% of LP vests to the creator on the same schedule; 10% is locked forever",
+        "Lock lengths are set at launch and counted from graduation; they don't depend on the outcome",
         "Graduated pool fee falls 2% → 0.25% as market cap grows 10×",
       ],
       name: "Event Horizon",
-      tagline: "Creator tokens and LP stay locked until the linked event resolves.",
+      tagline: "The creator's allocation and LP stay locked past the linked event's resolution date.",
       eventLinked: true,
       initialMcap: 30,
       migrationMcap: 300,
@@ -153,7 +155,7 @@ export const PRESETS: Record<PresetId, Preset> = {
           creatorPermanentLockedLiquidityPercentage: 0,
           creatorLiquidityPercentage: 0,
           creatorLiquidityVestingInfoParams: {
-            vestingPercentage: 90, // its own bucket: all creator LP vests, cliff at resolution
+            vestingPercentage: 90, // its own bucket: all creator LP vests, same cliff as the allocation
             bpsPerPeriod: 1000,
             numberOfPeriods: 10,
             cliffDurationFromMigrationTime: cliff,

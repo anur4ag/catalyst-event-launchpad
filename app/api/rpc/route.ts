@@ -42,8 +42,10 @@ export async function POST(req: Request) {
   } catch {
     return rpcError(400, "Invalid JSON");
   }
-  const denied = calls.find((c) => typeof c?.method !== "string" || !METHODS.has(c.method));
-  if (denied || calls.length > 20) return rpcError(403, `Method not allowed: ${String(denied?.method ?? "batch too large")}`);
+  if (!calls.length || calls.length > 20) return rpcError(403, "Batch must hold 1–20 calls");
+  // Index, not find(): a falsy entry (null, 0, "") must be refused, not read as "nothing denied".
+  const denied = calls.findIndex((c) => typeof c?.method !== "string" || !METHODS.has(c.method));
+  if (denied !== -1) return rpcError(403, `Method not allowed: ${String(calls[denied]?.method)}`);
   const res = await fetch(upstream, { method: "POST", headers: { "content-type": "application/json" }, body, cache: "no-store" });
   return new Response(res.body, { status: res.status, headers: { "content-type": "application/json" } });
 }

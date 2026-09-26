@@ -66,6 +66,15 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
   const livePrice = dammState ? Number(dammPrice(dammState.sqrtPrice, 6, 9).toString()) : price(vp.sqrtPrice);
   const cliff = Number(cfg.lockedVestingConfig.cliffDurationFromMigrationTime.toString());
   const hasVesting = !cfg.lockedVestingConfig.amountPerPeriod.isZero();
+  // Locks are durations fixed at launch and counted from graduation; they never read the market's outcome.
+  const resolution = market.data ? toUnix(market.data.resolutionTime) : null;
+  const launchedAt = Number(vp.activationPoint.toString()); // Catalyst pools activate by timestamp at creation
+  const lockNote =
+    resolution === null
+      ? null
+      : cliff >= resolution - launchedAt - 60
+        ? `It was sized at launch to end no earlier than the event's scheduled resolution (${fmtDate(resolution).split(",")[0]}); it counts time and doesn't depend on the outcome.`
+        : `It hit DBC's 2-year cap, so it can end before the event's scheduled resolution (${fmtDate(resolution).split(",")[0]}).`;
   const me = wallet.publicKey?.toBase58();
   const status = l.migrated ? "Graduated to DAMM v2" : l.progress >= 1 ? "Curve complete: ready to graduate" : "Bonding";
 
@@ -165,15 +174,15 @@ export default function TokenPage({ params }: { params: Promise<{ pool: string }
                 <>
                   <dt>Creator allocation</dt>
                   <dd>
-                    {l.migrated ? "vesting" : "locked"}: unlock starts {cliff >= DAY ? `${Math.round(cliff / DAY)} days` : "right"} after graduation
-                    {marketId && market.data ? `, after the event resolves (${fmtDate(toUnix(market.data.resolutionTime)).split(",")[0]})` : ""}
+                    {l.migrated ? "vesting" : "locked"}: unlock starts {cliff >= DAY ? `${Math.round(cliff / DAY)} days` : "right"} after graduation.
+                    {lockNote && ` ${lockNote}`} The creator&apos;s own buys aren&apos;t part of it.
                   </dd>
                 </>
               )}
               {cfg.creatorLiquidityVestingInfo.vestingPercentage > 0 && (
                 <>
                   <dt>Creator LP</dt>
-                  <dd>{cfg.creatorLiquidityVestingInfo.vestingPercentage}% of DAMM v2 liquidity vests from the same date</dd>
+                  <dd>{cfg.creatorLiquidityVestingInfo.vestingPercentage}% of DAMM v2 liquidity vests on the same schedule</dd>
                 </>
               )}
               <dt>Permanently locked LP</dt>

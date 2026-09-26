@@ -24,7 +24,7 @@ export default function Home() {
         </h1>
         <p>
           Every event token on Catalyst is tied to a live prediction market. Traders see the crowd&apos;s odds next to the price, and the creator&apos;s
-          tokens stay locked until the event resolves. Curves and graduation run on Meteora DBC and DAMM v2.
+          allocation and LP stay locked past the event&apos;s scheduled resolution date. Curves and graduation run on Meteora DBC and DAMM v2.
         </p>
         <div className="row" style={{ marginTop: 28, flexWrap: "wrap" }}>
           <Link className="btn btn-primary" href="/launch">

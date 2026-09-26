@@ -4,13 +4,13 @@ import Link from "next/link";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { launchSteps } from "@/lib/actions";
+import { clients, launchSteps } from "@/lib/actions";
 import { PLATFORM, PRESET_CONFIGS, SCALE, NETWORK } from "@/lib/config";
 import { fmtSol, pantaGet, useLoad, useSendSteps } from "@/lib/client";
 import { curvePoints, price } from "@/lib/curve";
 import { metaUri, suggestName, suggestSymbol } from "@/lib/launches";
 import { isOpen, toUnix, type Market } from "@/lib/panta";
-import { PRESETS, type PresetId } from "@/lib/presets";
+import { cliffUntilResolution, PRESETS, type PresetId } from "@/lib/presets";
 import { CurveChart, DataSourceNote, Odds, StepLog } from "@/components/ui";
 
 const fmtDate = (unix: number) => new Date(unix * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
@@ -27,13 +27,16 @@ export default function LaunchPage() {
   const [firstBuy, setFirstBuy] = useState("0.05");
   const [pool, setPool] = useState<string | null>(null);
   const { send, log, busy } = useSendSteps();
-  // ?preset=flat&config=<addr> comes from the presets page ("Launch on it").
-  const [customConfig, setCustomConfig] = useState<string | null>(null);
+  // ?preset=flat&config=<addr> comes from the presets page ("Launch on it"). That config belongs to
+  // that preset only; switching to another preset uses the other preset's own config.
+  const [custom, setCustom] = useState<{ preset: PresetId; config: string } | null>(null);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const id = q.get("preset");
-    if (id && id in PRESETS) setPreset(id as PresetId);
-    setCustomConfig(q.get("config"));
+    if (!id || !(id in PRESETS)) return;
+    setPreset(id as PresetId);
+    const config = q.get("config");
+    if (config && !PRESETS[id as PresetId].eventLinked) setCustom({ preset: id as PresetId, config });
   }, []);
 
   const cats = useLoad(() => pantaGet<{ categories: string[] }>("categories/"), []);
@@ -43,18 +46,28 @@ export default function LaunchPage() {
   const resolutionTime = m ? toUnix(m.resolutionTime) : undefined;
 
   const p = PRESETS[preset];
-  const configFor = (id: PresetId) => (customConfig && id === preset ? customConfig : PRESET_CONFIGS[id]);
+  const configFor = (id: PresetId) => (custom?.preset === id ? custom.config : PRESET_CONFIGS[id]);
   const presetConfig = p.eventLinked ? undefined : configFor(preset);
   const available = (id: PresetId) => (PRESETS[id].eventLinked ? !!marketId : !!configFor(id));
 
-  const cfg = useMemo(() => {
+  // Event Horizon builds its config at launch; static presets launch on a published config, so the
+  // summary reads that exact config from chain rather than rebuilding the preset locally.
+  const built = useMemo(() => {
+    if (!p.eventLinked) return null;
     try {
       return p.build({ scale: SCALE, resolutionTime: resolutionTime ?? Math.floor(Date.now() / 1000) + 30 * 86_400 });
     } catch {
       return null;
     }
   }, [p, resolutionTime]);
+  const published = useLoad(
+    async () => (presetConfig ? clients(connection).dbc.state.getPoolConfig(presetConfig) : null),
+    [connection, presetConfig],
+  );
+  const cfg = p.eventLinked ? built : published.data;
   const points = useMemo(() => (cfg ? curvePoints(cfg) : []), [cfg]);
+  const cliff = resolutionTime ? cliffUntilResolution(resolutionTime, Math.floor(Date.now() / 1000)) : null;
+  const capped = !!(resolutionTime && cliff !== null && cliff < resolutionTime - Date.now() / 1000 - 60);
 
   const pick = (mk: Market) => {
     setMarketId(mk.marketId);
@@ -63,7 +76,7 @@ export default function LaunchPage() {
     if (!name) setName(suggestName(mk.title));
   };
 
-  const valid = name.trim().length > 0 && name.length <= 32 && /^[A-Z0-9]{2,10}$/.test(symbol) && available(preset) && Number(firstBuy) >= 0;
+  const valid = name.trim().length > 0 && name.length <= 32 && /^[A-Z0-9]{2,10}$/.test(symbol) && available(preset) && !!cfg && Number(firstBuy) >= 0;
 
   async function launch() {
     if (!wallet.publicKey) return setVisible(true);
@@ -186,9 +199,17 @@ export default function LaunchPage() {
                 {p.eventLinked && (
                   <>
                     <dt>Your 10% allocation</dt>
-                    <dd>{resolutionTime ? `locked until ${fmtDate(resolutionTime)}, then 30-day vest` : "locked until the event resolves"}</dd>
+                    <dd>
+                      {cliff === null
+                        ? "locked until the event's scheduled resolution date, then vests over 30 days"
+                        : `locked for ${Math.round(cliff / 86_400)} days after graduation, then vests over 30 days. ${
+                            capped ? "That's DBC's 2-year cap, so it can unlock before the event resolves." : `Graduation comes after launch, so unlocking starts no earlier than ${fmtDate(resolutionTime!)}.`
+                          }`}
+                    </dd>
                     <dt>Your LP</dt>
-                    <dd>locked until resolution</dd>
+                    <dd>90% of the graduated pool, vesting on the same schedule; 10% is locked forever</dd>
+                    <dt>Your first buy</dt>
+                    <dd>yours right away; it isn&apos;t part of the locked allocation</dd>
                     <dt>Launch fee</dt>
                     <dd>50% → 1% over 15 min</dd>
                   </>
